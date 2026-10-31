@@ -1,14 +1,13 @@
 import { createDevvitTest } from "@devvit/test/server/vitest";
-import { redis } from "@devvit/web/server";
+import { reddit, redis } from "@devvit/web/server";
 import { expect, vi } from "vitest";
 import { app } from "./app";
 import { buildWebhookBody, handleOnPostCreate, parseWebhookUrl, PermanentError } from "./relay";
 
 const WEBHOOK_URL = "https://discord.com/api/webhooks/123/abc";
-const DEV_WEBHOOK_URL = "https://discord.com/api/webhooks/456/dev";
 
 const test = createDevvitTest({
-  settings: { webhookUrl: WEBHOOK_URL, devWebhookUrl: DEV_WEBHOOK_URL },
+  settings: { webhookUrl: WEBHOOK_URL },
 });
 
 const POST = {
@@ -18,7 +17,7 @@ const POST = {
 };
 
 const event = (post: unknown, subreddit = "hikingHungary") =>
-    ({ type: "PostCreate", post, subreddit: { name: subreddit } }) as never;
+    ({ type: "PostCreate", post, subreddit: { id: "t5_test", name: subreddit } }) as never;
 
 function mockFetch(status: number, headers: Record<string, string> = {}) {
   const fetchMock = vi.fn(async () => new Response(null, { status, headers }));
@@ -42,20 +41,13 @@ test("posts payload to the webhook", async () => {
   });
 });
 
-test("routes the dev subreddit to the dev webhook, never the production one", async () => {
+test("uses the subreddit name from the event in the message", async () => {
   const fetchMock = mockFetch(204);
 
-  await handleOnPostCreate(event(POST, "bbdevtest"));
+  await handleOnPostCreate(event(POST, "SomeOtherHikingSub"));
 
-  expect((fetchMock.mock.calls[0] as unknown as [URL])[0].href).toBe(DEV_WEBHOOK_URL);
-});
-
-test("skips subreddits that are not configured", async () => {
-  const fetchMock = mockFetch(204);
-
-  await expect(handleOnPostCreate(event(POST, "someoneelse"))).resolves.toBeUndefined();
-
-  expect(fetchMock).not.toHaveBeenCalled();
+  const init = (fetchMock.mock.calls[0] as unknown as [URL, RequestInit])[1];
+  expect(JSON.parse(String(init.body)).content).toContain("r/SomeOtherHikingSub");
 });
 
 test("truncates thread name by code point without splitting emoji", () => {
@@ -157,4 +149,88 @@ test("route: 503 on retryable failure, 200 on permanent failure", async () => {
 
   mockFetch(404);
   expect((await post(body)).status).toBe(200);
+});
+
+// --- settings validation ----------------------------------------------------
+
+const validate = async (value?: string) => {
+  const res = await app.request("/internal/settings/webhook-url", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ value, isEditing: false }),
+  });
+  return res.json();
+};
+
+test("validation: accepts a Discord webhook and empty (paused)", async () => {
+  expect(await validate(WEBHOOK_URL)).toEqual({ success: true });
+  expect(await validate(undefined)).toEqual({ success: true });
+});
+
+test("validation: rejects other hosts with a readable error", async () => {
+  const res = (await validate("https://example.com/api/webhooks/1/a")) as { success: boolean; error: string };
+  expect(res.success).toBe(false);
+  expect(res.error).toContain("discord.com");
+});
+
+// --- Modmail alerts ---------------------------------------------------------
+
+const triggerBody = JSON.stringify({ post: POST, subreddit: { id: "t5_test", name: "hikingHungary" } });
+const mockModmail = () => vi.spyOn(reddit.modMail, "createModNotification").mockResolvedValue("conv_1");
+
+test("alert: permanent failure sends one Modmail notice with a hint and the post link", async () => {
+  const modmail = mockModmail();
+  mockFetch(404);
+
+  expect((await post(triggerBody)).status).toBe(200);
+
+  expect(modmail).toHaveBeenCalledOnce();
+  const arg = modmail.mock.calls[0]![0];
+  expect(arg.subredditId).toBe("t5_test");
+  expect(arg.subject).toBe("Discord relay is not working");
+  expect(arg.bodyMarkdown).toContain("no longer exists");
+  expect(arg.bodyMarkdown).toContain("https://www.reddit.com/r/hikingHungary/comments/abc/my_trip/");
+  expect(arg.bodyMarkdown).not.toContain("webhooks/123");
+});
+
+test("alert: a dead webhook does not produce one message per post", async () => {
+  const modmail = mockModmail();
+  mockFetch(404);
+
+  await post(triggerBody);
+  await post(JSON.stringify({ post: { ...POST, id: "t3_def" }, subreddit: { id: "t5_test", name: "hikingHungary" } }));
+
+  expect(modmail).toHaveBeenCalledOnce();
+});
+
+test("alert: transient failures (5xx, 429) do not alert mods", async () => {
+  const modmail = mockModmail();
+
+  mockFetch(500);
+  await post(triggerBody);
+  mockFetch(429, { "retry-after": "1" });
+  await post(triggerBody);
+
+  expect(modmail).not.toHaveBeenCalled();
+});
+
+test("alert: no subreddit id in the payload means no alert and no crash", async () => {
+  const modmail = mockModmail();
+  mockFetch(404);
+
+  expect((await post(JSON.stringify({ post: POST }))).status).toBe(200);
+
+  expect(modmail).not.toHaveBeenCalled();
+});
+
+test("alert: a Modmail failure never breaks the trigger and re-arms the alert", async () => {
+  const modmail = mockModmail();
+  modmail.mockRejectedValueOnce(new Error("modmail down"));
+  mockFetch(404);
+
+  expect((await post(triggerBody)).status).toBe(200); // send fails, trigger still OK
+  expect(modmail).toHaveBeenCalledTimes(1);
+
+  await post(triggerBody); // cooldown was released, so the next failure alerts again
+  expect(modmail).toHaveBeenCalledTimes(2);
 });

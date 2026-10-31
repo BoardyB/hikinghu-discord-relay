@@ -1,72 +1,147 @@
-# E2E Test Guide
+# Testing guide
 
-One-time setup, then two commands. Goal: a post in your test subreddit creates a
-thread in your Discord channel.
+Two layers: fast **unit tests** that need nothing but Node, and a manual **end-to-end playtest** against real Reddit
+and Discord. Run the unit tests on every change. Run the end-to-end checklist before every `devvit publish`.
 
-## One-time setup
+- [1. Unit tests](#1-unit-tests)
+- [2. End-to-end playtest](#2-end-to-end-playtest)
+- [3. Pre-publish checklist](#3-pre-publish-checklist)
+- [4. Troubleshooting](#4-troubleshooting)
 
-1. **Discord webhook** — In your test channel: Channel settings → Integrations →
-   Webhooks → New Webhook → Copy URL. Confirm the URL starts with
-   `https://discord.com/` (not the legacy `discordapp.com`, which isn't
-   allow-listed).
-2. **Test subreddit** — easiest: create a private one at
-   [reddit.com/subreddits/create](https://www.reddit.com/subreddits/create)
-   named e.g. `hikinghu_relay_dev` (unique name, type Private). Creating it
-   makes you a moderator automatically; private is ideal for playtest noise.
-3. **Login** —
-   ```sh
-   cd devvit-app && npm install
-   npx devvit login
-   ```
-4. **Create the app on Reddit's side** (one-time, needs the login from step 3):
-   ```sh
-   npx devvit init --force
-   ```
-   Follow the browser confirmation and keep the app name `hikinghu-relay`.
-5. **Configure the playtest subreddit** — either set it once:
-   ```sh
-   # devvit.json
-   "dev": { "subreddit": "your_test_sub" }
-   ```
-   or export `DEVVIT_SUBREDDIT=your_test_sub` each session.
+---
 
-## Run a test
+## 1. Unit tests
 
-6. **Start the playtest** (installs the app on your test sub, rebuilds on save,
-   streams logs):
-   ```sh
-   npm run dev
-   ```
-7. **Set the secret** — after the first install (the CLI needs one install).
-   Run the key-only command and paste the webhook URL at the prompt:
-   ```sh
-   npx devvit settings set webhookUrl
-   ```
-8. **Post something** in your test subreddit (a normal text post, frontend or
-   API).
-9. **Check Discord** — a thread named `<title>` containing
-   `**New post on r/hikingHungary**` + the Reddit link should appear within
-   seconds. Only one thread, even if you refresh/re-trigger — that's the Redis
-   dedupe.
-10. **Watch logs** to trace what happened:
-   ```sh
-   npx devvit logs your_test_sub --since=15m --verbose
-   ```
+```sh
+npm test                 # tsc --noEmit, then vitest run
+npm run test:types       # typecheck only
+npx vitest               # watch mode while developing
+```
 
-## If it fails
+No network, no Reddit login and no Discord are needed. Redis and settings come from `@devvit/test`'s
+`createDevvitTest`, and `fetch` and the Modmail API are mocked.
 
-- **`Failed to POST ... fetch failed`** — the outbound call was blocked before
-  it reached Discord: check that `discord.com` is approved under your app's
-  Developer Settings (requests are submitted on first playtest; global-allowlist
-  domains usually clear in 1–2 business days at most). After approval, just
-  post again — no redeploy needed. If already approved, re-check the webhook
-  secret (step 7).
-- **No thread, no logs** — check that `discord.com` is approved under your app's
-  Developer Settings (requests are submitted on first playtest; global-allowlist
-  domains usually clear in 1–2 business days at most).
-- **`webhookUrl secret is not set`** — repeat step 7.
-- **503 / "Discord webhook returned ..."** in logs — Redis dedupe is working
-  (release + retry). Fix the cause, then re-trigger a new post.
-- **Regenerated webhook?** — just re-run step 7; no code change.
-- **`EADDRINUSE ... :::5678`** — you ran `devvit logs` while `npm run dev` is
-  streaming. Use the playtest's own log output, or stop it first.
+What is covered (all in `src/server/relay.test.ts`):
+
+| Area | Cases |
+| --- | --- |
+| Relay | Correct payload and URL, subreddit name taken from the event, no pings (`allowed_mentions`). |
+| Thread name | Truncated by code point (an emoji is never cut in half). |
+| Webhook URL | Only `https://discord.com/api/webhooks/…` accepted. Bad host, `http` and garbage rejected. |
+| De-duplication | Duplicate delivery posts once. Key kept after success. Key released after any failure. |
+| Failure classification | 5xx and 429 (with `retry-after`) and network errors are retryable. Other 4xx are permanent. |
+| Skips | Missing post fields (nothing is sent, nothing crashes). |
+| HTTP route | `200` on success, `400` on malformed JSON, `503` on a retryable failure, `200` on a permanent one. |
+| Settings validation | The validation endpoint accepts a Discord URL and an empty value, and rejects other hosts with a readable error. |
+| Modmail alerts | One notice with hint and post link, no webhook URL in the text, once-a-day cooldown, no alert for transient failures, no alert without a subreddit id, and a Modmail failure never breaks the trigger and re-arms the alert. |
+
+**Not covered by unit tests:** the "setting is empty, so skip" path. The test suite configures a webhook for the whole
+file, so this path is checked only by scenario 5 of the end-to-end playtest. A second test file with
+`createDevvitTest({ settings: {} })` would close the gap. Also not covered: the 10-second `fetch` timeout, and
+whitespace-only titles.
+
+When you change behaviour, add or update a test first. When you add a failure mode, decide whether it is transient
+(retry, no alert) or permanent (no retry, alert), and test both the HTTP status and whether Modmail fires.
+
+> Unit tests prove the logic, not the platform. They cannot show that Reddit delivers the trigger, that the Discord
+> request is accepted, or that a Modmail notice arrives. That is what section 2 is for.
+
+---
+
+## 2. End-to-end playtest
+
+### One-time setup
+
+1. **Discord.** Create a **Forum channel** for testing. Add a webhook (channel settings, Integrations, Webhooks, New
+   Webhook) and copy the URL. It must start with `https://discord.com/`. The legacy `discordapp.com` host is not
+   allowed.
+2. **Test subreddit.** Create a small private subreddit you moderate (under 200 subscribers), for example
+   `hikinghu_relay_dev`. This repo's `devvit.json` uses `bbdevtest`, so either use that or change `dev.subreddit`
+   (or export `DEVVIT_SUBREDDIT=your_test_sub` per session).
+3. **Log in.** `npm install` and then `npx devvit login`.
+4. **Create the app on Reddit's side**, once: `npx devvit init --force`, and keep the app name `hikinghu-relay`.
+
+### Start the playtest
+
+```sh
+npm run dev
+```
+
+This builds the server, installs a playtest version on the test subreddit, rebuilds on every save, and streams logs.
+Wait for the **Playtest ready** box. `Warning: scripts.dev exited before producing a first build` means the watch
+script is wrong (see [Troubleshooting](#4-troubleshooting)).
+
+### Configure the webhook (per subreddit, in the app's settings)
+
+There is no `devvit settings set` step any more. The webhook is a per-subreddit setting, exactly as the moderators
+will use it.
+
+1. Open the app's settings for your test subreddit (as a moderator, in Reddit's installed-apps settings for that
+   subreddit. The exact menu location is Reddit's and may change).
+2. Paste the test webhook URL into **Discord webhook URL** and save.
+
+Your test subreddit has its own setting value, so testing can never post into a production Discord channel.
+
+### Scenarios
+
+Run these in order. Create posts as a normal text post in the test subreddit. Watch the playtest log stream.
+
+| # | Scenario | Do | Expected |
+| --- | --- | --- | --- |
+| 1 | **Happy path** | Create a post. | One thread named after the title, containing `**New post on r/<sub>**` and the link. Log: `relayed t3_… to Discord`. |
+| 2 | **De-duplication** | Refresh and re-trigger the same post. | Still exactly one thread. |
+| 3 | **Long or emoji title** | Post a title of about 120 characters, with emoji near the end. | Thread name is cut at 90 characters with no broken character. |
+| 4 | **Settings validation** | Save `https://example.com/x` in the setting. | The form shows an error mentioning `discord.com`. Empty value saves fine. |
+| 5 | **Pause** | Clear the setting, then post. | No thread. Log: `no webhook configured … skipping`. No Modmail. |
+| 6 | **Deleted webhook (permanent, 404)** | Put the URL back, delete the webhook in Discord, then post. | No thread. One Modmail notification *"Discord relay is not working"* saying the webhook no longer exists, with the post link. A second failing post the same day sends **no** second notice. |
+| 7 | **Wrong channel type (permanent, 400)** | Create a webhook in a normal *text* channel, paste it, then post. | Modmail hint mentions a Forum channel. |
+| 8 | **Recovery** | Paste a good webhook and post. | Thread appears. Later posts are relayed normally. |
+| 9 | **Transient failure (optional)** | Hard to force against real Discord. Rely on the unit tests, or temporarily point the code at an unreachable endpoint in a throwaway branch. | `503` in the logs, **no** Modmail, and the lock is released so a retry can succeed. |
+
+For scenario 6, the cooldown lasts 24 hours. To re-test the notice on the same day, either use a fresh install on
+another test subreddit or wait. Do not shorten the cooldown in production code.
+
+### Reading logs
+
+```sh
+npx devvit logs <your_test_sub> --since=15m --verbose
+```
+
+Log lines the app writes: `relayed <id> to Discord`, `no webhook configured for r/<sub>, skipping <id>`,
+`onPostCreate missing post fields, skipping`, `onPostCreate permanent failure: …`,
+`onPostCreate failed, asking for retry: …`, `could not notify mods: …`.
+
+---
+
+## 3. Pre-publish checklist
+
+- [ ] `npm test` passes and `npm run build` succeeds, locally and in CI.
+- [ ] `package-lock.json` is committed and in sync (`npm ci` works).
+- [ ] Scenarios 1, 2, 4, 5, 6 and 8 pass on the test subreddit.
+- [ ] The Modmail notice in scenario 6 actually arrived and reads well to a non-developer.
+- [ ] `discord.com` is approved under the app's developer settings.
+- [ ] Terms & Conditions and Privacy Policy links are set.
+- [ ] No `.env` file or webhook URL is committed.
+- [ ] The README's support contact and maintainer-of-record placeholders are filled in.
+- [ ] The moderators have the install link and the setup steps from the README.
+
+After the moderators install it, run scenario 1 once in the real subreddit and confirm they can find the app's
+settings and the Modmail notifications.
+
+---
+
+## 4. Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `Failed to POST … /internal/triggers/post-create; … fetch failed` | The platform could not reach your server. Most likely the bundle does not listen: `index.ts` must call `serve({ fetch: app.fetch, createServer, port: getServerPort() })`. A bare `export default app` builds fine but never starts a server. Rebuild and reload the playtest. |
+| `Warning: scripts.dev exited before producing a first build` | `scripts.dev` in `devvit.json` must be `npm run build:server -- --watch=forever`. Without the `--`, npm swallows `--watch`, esbuild runs once and exits. |
+| `Warning: This app was built with Node.js … which is outdated` | Informational. Use Node.js 24. |
+| Playtest works but no thread appears, no logs | `discord.com` may not be approved yet under the app's developer settings (requested on first playtest, can take a while). After approval, just post again. No redeploy is needed. |
+| `no webhook configured … skipping` in logs | The subreddit setting is empty. Set it (see above). |
+| `Discord rejected the webhook with 404` or `401` / `403` | Webhook deleted or regenerated. Paste a new URL. |
+| `Discord rejected the webhook with 400` | The channel is not a Forum channel. |
+| `Discord returned 429` | Discord rate limit. It is treated as transient, so the post is retried. If it persists, reduce posting bursts. |
+| `could not notify mods: …` | Modmail failed (missing `reddit` permission in `devvit.json`, or an API error). The relay itself is unaffected. Fix the permission and republish. |
+| `subreddit is missing from Context` when you `curl` the server locally | Expected. Devvit's wrapper requires the platform's `devvit-*` headers, which Reddit adds. Test through `app.request(...)` in unit tests or through a real playtest instead. |
+| `EADDRINUSE … :::5678` | You ran `devvit logs` while `npm run dev` is already streaming. Use the playtest's own log output, or stop it first. |

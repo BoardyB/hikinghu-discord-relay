@@ -10,17 +10,29 @@ const DONE_TTL_SECONDS = 30 * 24 * 60 * 60;
 const FETCH_TIMEOUT_MS = 10_000;
 const THREAD_NAME_MAX = 90; // Discord allows 100; keep headroom.
 
-// Lowercased subreddit name -> name of the secret holding its webhook.
-// Unknown subreddits are skipped, so an install elsewhere can never post to
-// your Discord, and playtests on the dev sub can't hit the production channel.
-const WEBHOOK_SECRET_BY_SUBREDDIT: Record<string, string> = {
-  hikinghungary: "webhookUrl",
-  bbdevtest: "devWebhookUrl",
-};
-
-/** Retrying cannot help (bad/missing webhook, 4xx from Discord). */
+/** Retrying cannot help (bad webhook, 4xx from Discord). `hint` is mod-facing advice. */
 export class PermanentError extends Error {
   override name = "PermanentError";
+  constructor(
+    message: string,
+    readonly hint = "Open the app settings and check the Discord webhook URL.",
+  ) {
+    super(message);
+  }
+}
+
+function discordRejectionHint(status: number): string {
+  switch (status) {
+    case 400:
+      return "Discord refused the message. Most often the webhook's channel is not a Forum channel (only forum channels can create threads).";
+    case 401:
+    case 403:
+      return "Discord rejected the webhook token. Create a new webhook and paste its URL into the app settings.";
+    case 404:
+      return "The webhook no longer exists (it was probably deleted). Create a new one and paste its URL into the app settings.";
+    default:
+      return "Check that the webhook still works in Discord, then re-paste its URL in the app settings.";
+  }
 }
 
 export function buildWebhookBody(
@@ -70,14 +82,12 @@ export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<vo
   }
 
   const subredditName = input.subreddit?.name ?? "";
-  const secretName = WEBHOOK_SECRET_BY_SUBREDDIT[subredditName.toLowerCase()];
-  if (!secretName) {
-    console.warn(`subreddit "${subredditName}" is not configured, skipping ${post.id}`);
+  const rawUrl = await settings.get<string>("webhookUrl");
+  if (!rawUrl) {
+    // Installed but not configured yet (or paused by a mod): not an error.
+    console.warn(`no webhook configured for r/${subredditName}, skipping ${post.id}`);
     return;
   }
-
-  const rawUrl = await settings.get<string>(secretName);
-  if (!rawUrl) throw new PermanentError(`${secretName} secret is not set`);
   const webhookUrl = parseWebhookUrl(rawUrl);
 
   const key = DEDUPE_KEY_PREFIX + post.id;
@@ -113,5 +123,5 @@ export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<vo
   if (response.status === 429 || response.status >= 500) {
     throw new Error(`Discord returned ${response.status}${retryAfter ? ` (retry-after ${retryAfter}s)` : ""}`);
   }
-  throw new PermanentError(`Discord rejected the webhook with ${response.status}`);
+  throw new PermanentError(`Discord rejected the webhook with ${response.status}`, discordRejectionHint(response.status));
 }

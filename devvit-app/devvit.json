@@ -12,24 +12,20 @@
       "domains": [
         "discord.com"
       ]
-    }
+    },
+    "reddit": true
   },
   "triggers": {
     "onPostCreate": "/internal/triggers/post-create"
   },
   "settings": {
-    "global": {
+    "subreddit": {
       "webhookUrl": {
         "type": "string",
         "label": "Discord webhook URL",
-        "isSecret": true,
-        "helpText": "Discord webhook that creates a thread per new r/hikingHungary post."
-      },
-      "devWebhookUrl": {
-        "type": "string",
-        "label": "Discord webhook URL (dev/test sub)",
-        "isSecret": true,
-        "helpText": "Used only for the playtest subreddit (bbdevtest)."
+        "helpText": "Discord channel webhook. In Discord: channel settings \u2192 Integrations \u2192 Webhooks. The channel must be a Forum channel. Leave empty to pause relaying.",
+        "placeholder": "https://discord.com/api/webhooks/...",
+        "validationEndpoint": "/internal/settings/webhook-url"
       }
     }
   },
