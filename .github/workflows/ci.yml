@@ -1,24 +1,22 @@
 name: ci
 on: [push, pull_request]
+
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
-
     defaults:
       run:
-        working-directory: 'devvit-app'
-    strategy:
-      matrix:
-        node-version: [ 24.x ]
-
+        working-directory: devvit-app
     steps:
-      - uses: actions/checkout@v2
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-          cache-dependency-path: 'devvit-app/package-lock.json'
+          node-version: 24
+          cache: npm
+          cache-dependency-path: devvit-app/package-lock.json
       - run: npm ci
       - run: npm test
       - run: npm run build
