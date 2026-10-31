@@ -1,0 +1,43 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "hikinghu-relay",
+  "server": {
+    "dir": "dist/server",
+    "entry": "index.cjs"
+  },
+  "permissions": {
+    "redis": true,
+    "http": {
+      "enable": true,
+      "domains": [
+        "discord.com"
+      ]
+    }
+  },
+  "triggers": {
+    "onPostCreate": "/internal/triggers/post-create"
+  },
+  "settings": {
+    "global": {
+      "webhookUrl": {
+        "type": "string",
+        "label": "Discord webhook URL",
+        "isSecret": true,
+        "helpText": "Discord webhook that creates a thread per new r/hikingHungary post."
+      },
+      "devWebhookUrl": {
+        "type": "string",
+        "label": "Discord webhook URL (dev/test sub)",
+        "isSecret": true,
+        "helpText": "Used only for the playtest subreddit (bbdevtest)."
+      }
+    }
+  },
+  "scripts": {
+    "dev": "npm run build:server -- --watch=forever",
+    "build": "npm run build"
+  },
+  "dev": {
+    "subreddit": "bbdevtest"
+  }
+}
