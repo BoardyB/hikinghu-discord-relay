@@ -99,7 +99,7 @@ most once a day.
 | No thread and no Modmail | Setting is empty, the app is not installed, or the post was removed by safety checks. | Check the setting. New posts are relayed only after Reddit's checks pass. |
 | Thread appears twice | Should not happen (de-duplicated). | Tell the maintainer. |
 
-Still stuck? Contact the maintainer: **[ADD SUPPORT CONTACT: email or Reddit account]**.
+Still stuck? Contact the maintainer: **[https://www.reddit.com/user/boardyb/]**.
 
 ---
 
@@ -115,7 +115,10 @@ Still stuck? Contact the maintainer: **[ADD SUPPORT CONTACT: email or Reddit acc
 
 ### Commands
 
+The app lives in the `devvit-app/` folder. Run everything below from there.
+
 ```sh
+cd devvit-app
 npm install
 npx devvit login          # once
 npm test                  # typecheck + unit tests (no network, no Reddit)
@@ -128,12 +131,13 @@ End-to-end testing against real Reddit and Discord: see [TESTING.md](TESTING.md)
 ### Project layout
 
 ```
-devvit.json               app config: server entry, permissions, trigger, settings, dev subreddit
-src/server/index.ts       starts the HTTP server (Hono on Devvit's createServer, on getServerPort())
-src/server/app.ts         routes: the post-create trigger and the settings validation endpoint
-src/server/relay.ts       the relay: lookup, de-duplication, Discord call, error classification
-src/server/alerts.ts      Modmail failure notice with a once-a-day cooldown
-src/server/relay.test.ts  unit tests (mocked Redis, fetch and Modmail)
+.github/workflows/ci.yml                 CI: npm ci, npm test, npm run build
+devvit-app/devvit.json                    app config: server entry, permissions, trigger, settings, dev subreddit
+devvit-app/src/server/index.ts            starts the HTTP server (Hono on Devvit's createServer, on getServerPort())
+devvit-app/src/server/app.ts              routes: the post-create trigger and the settings validation endpoint
+devvit-app/src/server/relay.ts            the relay: lookup, de-duplication, Discord call, error classification
+devvit-app/src/server/alerts.ts           Modmail failure notice with a once-a-day cooldown
+devvit-app/src/server/relay.test.ts       unit tests (mocked Redis, fetch and Modmail)
 ```
 
 ### Things that are easy to get wrong
@@ -198,7 +202,7 @@ npx devvit uninstall <sub>           # remove the app from a subreddit
 - If the app should outlive any one person's involvement, publish it from a dedicated shared account whose credentials
   are kept in the team's password manager, and record that decision here.
 
-**Maintainer of record:** **[ADD NAME / ACCOUNT]**
+**Maintainer of record:** **[https://www.reddit.com/user/boardyb/]**
 
 ---
 

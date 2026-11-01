@@ -54,10 +54,10 @@ export function parseWebhookUrl(raw: string): URL {
   try {
     url = new URL(raw);
   } catch {
-    throw new PermanentError("webhook secret is not a valid URL");
+    throw new PermanentError("The webhook URL is not a valid URL.");
   }
   if (url.protocol !== "https:" || url.host !== "discord.com" || !url.pathname.startsWith("/api/webhooks/")) {
-    throw new PermanentError(`webhook secret must be https://discord.com/api/webhooks/..., got host ${url.host}`);
+    throw new PermanentError(`The webhook URL must start with https://discord.com/api/webhooks/ (got host ${url.host}).`);
   }
   return url;
 }

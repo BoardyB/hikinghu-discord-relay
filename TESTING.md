@@ -3,52 +3,15 @@
 Two layers: fast **unit tests** that need nothing but Node, and a manual **end-to-end playtest** against real Reddit
 and Discord. Run the unit tests on every change. Run the end-to-end checklist before every `devvit publish`.
 
-- [1. Unit tests](#1-unit-tests)
-- [2. End-to-end playtest](#2-end-to-end-playtest)
-- [3. Pre-publish checklist](#3-pre-publish-checklist)
-- [4. Troubleshooting](#4-troubleshooting)
+All commands below are run from the `devvit-app/` folder (`cd devvit-app`).
+
+- [1. End-to-end playtest](#1-end-to-end-playtest)
+- [2. Pre-publish checklist](#2-pre-publish-checklist)
+- [3. Troubleshooting](#3-troubleshooting)
 
 ---
 
-## 1. Unit tests
-
-```sh
-npm test                 # tsc --noEmit, then vitest run
-npm run test:types       # typecheck only
-npx vitest               # watch mode while developing
-```
-
-No network, no Reddit login and no Discord are needed. Redis and settings come from `@devvit/test`'s
-`createDevvitTest`, and `fetch` and the Modmail API are mocked.
-
-What is covered (all in `src/server/relay.test.ts`):
-
-| Area | Cases |
-| --- | --- |
-| Relay | Correct payload and URL, subreddit name taken from the event, no pings (`allowed_mentions`). |
-| Thread name | Truncated by code point (an emoji is never cut in half). |
-| Webhook URL | Only `https://discord.com/api/webhooks/…` accepted. Bad host, `http` and garbage rejected. |
-| De-duplication | Duplicate delivery posts once. Key kept after success. Key released after any failure. |
-| Failure classification | 5xx and 429 (with `retry-after`) and network errors are retryable. Other 4xx are permanent. |
-| Skips | Missing post fields (nothing is sent, nothing crashes). |
-| HTTP route | `200` on success, `400` on malformed JSON, `503` on a retryable failure, `200` on a permanent one. |
-| Settings validation | The validation endpoint accepts a Discord URL and an empty value, and rejects other hosts with a readable error. |
-| Modmail alerts | One notice with hint and post link, no webhook URL in the text, once-a-day cooldown, no alert for transient failures, no alert without a subreddit id, and a Modmail failure never breaks the trigger and re-arms the alert. |
-
-**Not covered by unit tests:** the "setting is empty, so skip" path. The test suite configures a webhook for the whole
-file, so this path is checked only by scenario 5 of the end-to-end playtest. A second test file with
-`createDevvitTest({ settings: {} })` would close the gap. Also not covered: the 10-second `fetch` timeout, and
-whitespace-only titles.
-
-When you change behaviour, add or update a test first. When you add a failure mode, decide whether it is transient
-(retry, no alert) or permanent (no retry, alert), and test both the HTTP status and whether Modmail fires.
-
-> Unit tests prove the logic, not the platform. They cannot show that Reddit delivers the trigger, that the Discord
-> request is accepted, or that a Modmail notice arrives. That is what section 2 is for.
-
----
-
-## 2. End-to-end playtest
+## 1. End-to-end playtest
 
 ### One-time setup
 
@@ -113,7 +76,7 @@ Log lines the app writes: `relayed <id> to Discord`, `no webhook configured for 
 
 ---
 
-## 3. Pre-publish checklist
+## 2. Pre-publish checklist
 
 - [ ] `npm test` passes and `npm run build` succeeds, locally and in CI.
 - [ ] `package-lock.json` is committed and in sync (`npm ci` works).
@@ -130,7 +93,7 @@ settings and the Modmail notifications.
 
 ---
 
-## 4. Troubleshooting
+## 3. Troubleshooting
 
 | Symptom | Cause and fix |
 | --- | --- |
