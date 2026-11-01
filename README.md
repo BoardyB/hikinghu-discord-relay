@@ -2,7 +2,7 @@
 
 A [Devvit](https://developers.reddit.com) app that relays every new post in a subreddit to Discord. For each
 Reddit post it creates one thread in a Discord **forum channel** containing a link to the post. It replaces the old
-RSS-polling `bot.py`.
+RSS-polling.
 
 Reddit hosts and runs the server. There is nothing to deploy or keep running yourself.
 
@@ -66,7 +66,8 @@ You do not need to be a developer. Setup takes a few minutes.
 
 **On Reddit** (you need to be a moderator of the subreddit):
 
-1. Open the app's install page (ask the maintainer for the link) and choose **Add to community**.
+1. Open the app's page (find **hikinghu-relay** in the Reddit App Directory, or use the link from the maintainer) and
+   choose **Add to community**.
 2. Open the app's settings for your subreddit and paste the URL into **Discord webhook URL**. Saving checks that the
    URL looks like a Discord webhook.
 3. Make a test post. A thread should appear in Discord within a few seconds.
@@ -115,10 +116,7 @@ Still stuck? Contact the maintainer: **[https://www.reddit.com/user/boardyb/]**.
 
 ### Commands
 
-The app lives in the `devvit-app/` folder. Run everything below from there.
-
 ```sh
-cd devvit-app
 npm install
 npx devvit login          # once
 npm test                  # typecheck + unit tests (no network, no Reddit)
@@ -132,12 +130,12 @@ End-to-end testing against real Reddit and Discord: see [TESTING.md](TESTING.md)
 
 ```
 .github/workflows/ci.yml                 CI: npm ci, npm test, npm run build
-devvit-app/devvit.json                    app config: server entry, permissions, trigger, settings, dev subreddit
-devvit-app/src/server/index.ts            starts the HTTP server (Hono on Devvit's createServer, on getServerPort())
-devvit-app/src/server/app.ts              routes: the post-create trigger and the settings validation endpoint
-devvit-app/src/server/relay.ts            the relay: lookup, de-duplication, Discord call, error classification
-devvit-app/src/server/alerts.ts           Modmail failure notice with a once-a-day cooldown
-devvit-app/src/server/relay.test.ts       unit tests (mocked Redis, fetch and Modmail)
+devvit.json                    app config: server entry, permissions, trigger, settings, dev subreddit
+src/server/index.ts            starts the HTTP server (Hono on Devvit's createServer, on getServerPort())
+src/server/app.ts              routes: the post-create trigger and the settings validation endpoint
+src/server/relay.ts            the relay: lookup, de-duplication, Discord call, error classification
+src/server/alerts.ts           Modmail failure notice with a once-a-day cooldown
+src/server/relay.test.ts       unit tests (mocked Redis, fetch and Modmail)
 ```
 
 ### Things that are easy to get wrong
@@ -172,19 +170,35 @@ URL.
 
 ## Publishing and handover
 
-`devvit upload` is for development only: the version is visible only to the app owner and can be installed only on a
-small test subreddit (under 200 subscribers). To let moderators of a real community install the app:
+Who can install a version depends on how it was published (as reported by Devvit CLI 0.15.1):
+
+| Command | Who can install it | Review |
+| --- | --- | --- |
+| `devvit upload` | Only the app owner, and only on a test subreddit under 200 subscribers | None |
+| `devvit publish` (unlisted, the default) | Only the app owner, on any subreddit the owner moderates | None: available immediately |
+| `devvit publish --public` | Any moderator of any subreddit | Reddit reviews it first |
+
+**Moderators who do not own the app can install it only after a public publish has been approved.** An unlisted
+version is useful for the owner's own subreddits, and for trying a version before requesting review. To let the
+moderators of a real community install the app:
 
 1. Make sure the fetch-domain request for `discord.com` is approved and that the **Terms & Conditions** and **Privacy
    Policy** links are set (required for apps that use `fetch`). Both are on the app's developer settings page,
    `https://developers.reddit.com/apps/<app-slug>/developer-settings`. Use the GitHub URLs of [TERMS.md](TERMS.md)
    and [PRIVACY.md](PRIVACY.md) (`https://github.com/BoardyB/hikinghu-discord-relay/blob/master/TERMS.md` and
    `.../PRIVACY.md`). `devvit publish` refuses to continue until both are set.
-2. Run `npx devvit publish`. This uploads the source and files a publish request. It is **unlisted** by default, so the
-   app is not in the public directory and is installed through its link. `--public` requests a public listing.
-   `--bump major|minor|patch` controls the version (patch by default).
-3. Wait for Reddit's review.
-4. Send the moderators the app's install link and the [setup steps](#for-moderators-setup-and-support) above.
+2. Check the README. Reddit's reviewers read it, and a public listing shows it to every moderator browsing the App
+   Directory. The CLI picks it up from the root folder, so confirm that the listing shows the text you
+   expect.
+3. Run `npx devvit publish --public --version <x.y.z>`. This builds the app, uploads the source and
+   files a publish request. Use a version number that has not been published before: submitting the same version twice
+   fails with "already been submitted for review". `--bump major|minor|patch` picks the next number automatically
+   (patch by default).
+4. Wait for Reddit's review. You will get an email when the app is approved. The review time is not documented.
+5. After approval, send the moderators the app's link and the [setup steps](#for-moderators-setup-and-support) above.
+
+Until the app is approved, only the owner account can install it. If you need it running sooner, the owner account
+must moderate the subreddit: run `npx devvit install r/<sub> hikinghu-relay@<version>` from that account.
 
 Useful commands afterwards:
 
@@ -202,6 +216,8 @@ npx devvit uninstall <sub>           # remove the app from a subreddit
   collaborator command. Only the owner can ship code changes and read logs.
 - Moderators can reconfigure the webhook, pause the relay, and uninstall or reinstall the app. They cannot change
   code. That is why failures are reported to them by Modmail instead of only in logs.
+- A private or unlisted version can be installed, reinstalled or updated only by the owner. A **public** listing is what
+  lets the mod team reinstall the app themselves if an installation is ever removed.
 - If the app should outlive any one person's involvement, publish it from a dedicated shared account whose credentials
   are kept in the team's password manager, and record that decision here.
 

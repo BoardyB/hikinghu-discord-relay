@@ -3,7 +3,7 @@
 Two layers: fast **unit tests** that need nothing but Node, and a manual **end-to-end playtest** against real Reddit
 and Discord. Run the unit tests on every change. Run the end-to-end checklist before every `devvit publish`.
 
-All commands below are run from the `devvit-app/` folder (`cd devvit-app`).
+All commands below are run from the root folder.
 
 - [1. End-to-end playtest](#1-end-to-end-playtest)
 - [2. Pre-publish checklist](#2-pre-publish-checklist)
@@ -86,6 +86,8 @@ Log lines the app writes: `relayed <id> to Discord`, `no webhook configured for 
 - [ ] Terms & Conditions and Privacy Policy links are set.
 - [ ] No `.env` file or webhook URL is committed.
 - [ ] The README's support contact and maintainer-of-record placeholders are filled in.
+- [ ] The app was published with `--public` and Reddit's approval email has arrived. An unlisted version cannot be
+    installed by other moderators.
 - [ ] The moderators have the install link and the setup steps from the README.
 
 After the moderators install it, run scenario 1 once in the real subreddit and confirm they can find the app's
