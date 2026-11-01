@@ -26,9 +26,14 @@ export async function alertMods(
       nx: true,
       expiration: new Date(Date.now() + ALERT_COOLDOWN_MS),
     });
-    if (!first) return;
+    if (!first) {
+      console.log("modmail: failure notice already sent in the last 24h, not sending another");
+      return;
+    }
+    console.log("modmail: sending failure notice to the mod team");
     try {
       await reddit.modMail.createModNotification({ ...notice, subredditId: subredditId as `t5_${string}` });
+      console.log("modmail: failure notice sent");
     } catch (error) {
       await redis.del(ALERT_KEY); // let the next failure try again
       throw error;

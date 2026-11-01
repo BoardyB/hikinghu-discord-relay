@@ -95,8 +95,12 @@ export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<vo
     nx: true,
     expiration: new Date(Date.now() + LOCK_TTL_SECONDS * 1000),
   });
-  if (!acquired) return; // duplicate delivery
+  if (!acquired) {
+    console.log(`${post.id} was already handled, skipping duplicate delivery`);
+    return;
+  }
 
+  console.log(`sending ${post.id} to Discord`);
   let response: Response;
   try {
     response = await fetch(webhookUrl, {
@@ -110,6 +114,7 @@ export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<vo
     throw new Error(`discord fetch failed for ${post.id}: ${describe(error)}`);
   }
 
+  console.log(`Discord answered ${response.status} for ${post.id}`);
   if (response.status === 200 || response.status === 204) {
     await redis
       .expire(key, DONE_TTL_SECONDS)
