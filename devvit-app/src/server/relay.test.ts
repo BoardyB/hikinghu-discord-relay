@@ -7,7 +7,7 @@ import { buildWebhookBody, handleOnPostCreate, parseWebhookUrl, PermanentError }
 const WEBHOOK_URL = "https://discord.com/api/webhooks/123/abc";
 
 const test = createDevvitTest({
-  settings: { webhookUrl: WEBHOOK_URL },
+  settings: { discordWebhookUrl: WEBHOOK_URL },
 });
 
 const POST = {

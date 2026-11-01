@@ -82,7 +82,7 @@ export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<vo
   }
 
   const subredditName = input.subreddit?.name ?? "";
-  const rawUrl = await settings.get<string>("webhookUrl");
+  const rawUrl = await settings.get<string>("discordWebhookUrl");
   if (!rawUrl) {
     // Installed but not configured yet (or paused by a mod): not an error.
     console.warn(`no webhook configured for r/${subredditName}, skipping ${post.id}`);

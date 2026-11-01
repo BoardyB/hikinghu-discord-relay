@@ -20,7 +20,7 @@
   },
   "settings": {
     "subreddit": {
-      "webhookUrl": {
+      "discordWebhookUrl": {
         "type": "string",
         "label": "Discord webhook URL",
         "helpText": "Discord channel webhook. In Discord: channel settings \u2192 Integrations \u2192 Webhooks. The channel must be a Forum channel. Leave empty to pause relaying.",
