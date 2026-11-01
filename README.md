@@ -175,8 +175,11 @@ URL.
 `devvit upload` is for development only: the version is visible only to the app owner and can be installed only on a
 small test subreddit (under 200 subscribers). To let moderators of a real community install the app:
 
-1. Make sure the fetch-domain request for `discord.com` is approved and that **Terms & Conditions** and **Privacy
-   Policy** links are set (required for apps that use `fetch`).
+1. Make sure the fetch-domain request for `discord.com` is approved and that the **Terms & Conditions** and **Privacy
+   Policy** links are set (required for apps that use `fetch`). Both are on the app's developer settings page,
+   `https://developers.reddit.com/apps/<app-slug>/developer-settings`. Use the GitHub URLs of [TERMS.md](TERMS.md)
+   and [PRIVACY.md](PRIVACY.md) (`https://github.com/BoardyB/hikinghu-discord-relay/blob/master/TERMS.md` and
+   `.../PRIVACY.md`). `devvit publish` refuses to continue until both are set.
 2. Run `npx devvit publish`. This uploads the source and files a publish request. It is **unlisted** by default, so the
    app is not in the public directory and is installed through its link. `--public` requests a public listing.
    `--bump major|minor|patch` controls the version (patch by default).
@@ -214,6 +217,10 @@ The following domain is requested for this app:
   installed community. Requests go only to the webhook URL the community's moderators configured in the app settings,
   and the app refuses any URL that is not `https://discord.com/api/webhooks/…`. Only the post title and a link to the
   post are sent. No other data leaves Reddit.
+
+This use complies with Reddit's fetch guidelines: `discord.com` is a publicly documented API (incoming webhooks),
+requested by its exact hostname and used only for the purpose above. The data involved is described in the
+[Privacy Policy](PRIVACY.md), and the usage terms are in [TERMS.md](TERMS.md).
 
 ---
 
