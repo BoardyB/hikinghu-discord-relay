@@ -22,15 +22,12 @@ const POST = {
 };
 const SUBREDDIT = { id: "t5_test", name: "hikingHungary" };
 
-// --- Discord stand-in ---------------------------------------------------------
-
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
 type Call = { url: string; init: RequestInit };
 
 const CREATED: Reply = { status: 201, body: { id: THREAD_ID, parent_id: CHANNEL_ID } };
 const DELETED: Reply = { status: 200, body: { id: THREAD_ID } };
 
-/** Answers every Discord call with `handler(...)` and records the calls. */
 function mockDiscord(handler: (call: Call) => Reply | Promise<Reply>): Call[] {
   const calls: Call[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -42,7 +39,6 @@ function mockDiscord(handler: (call: Call) => Reply | Promise<Reply>): Call[] {
   return calls;
 }
 
-/** Create answers with a thread, delete answers with `remove`. */
 const discord = (remove: Reply = DELETED) =>
   mockDiscord(({ init }) => (init.method === "DELETE" ? remove : CREATED));
 
@@ -51,8 +47,6 @@ const deletes = (calls: Call[]) => calls.filter((call) => call.init.method === "
 const createEvent = (post: unknown = POST) => ({ type: "PostCreate", post, subreddit: SUBREDDIT }) as never;
 const relayPost = () => handleOnPostCreate(createEvent());
 const storedThread = () => redis.get("thread:abc");
-
-// --- the thread record ----------------------------------------------------------
 
 test("create: records the thread Discord answered with", async () => {
   discord();
@@ -78,8 +72,6 @@ test("create: does not trust ids that are not Discord ids", async () => {
 
   expect(await redis.get("thread:abc")).toBeFalsy();
 });
-
-// --- removing a thread ------------------------------------------------------------
 
 test("removal: deletes the recorded thread as the bot and forgets it", async () => {
   const calls = discord();
@@ -211,8 +203,6 @@ pausedTest("removal: does nothing while the relay is paused", async () => {
   expect(await redis.get("removed:abc")).toBeFalsy();
 });
 
-// --- removal racing the create ----------------------------------------------------
-
 test("race: a post removed before it was relayed is never relayed", async () => {
   const calls = discord();
   await handleRemoval("t3_abc"); // the removal event wins the race
@@ -275,8 +265,6 @@ test("race: a failing clean-up never breaks the create", async () => {
 
   expect(await redis.get("posted:t3_abc")).toBeTruthy();
 });
-
-// --- routes -----------------------------------------------------------------------
 
 const route = (name: string, body: unknown) =>
   app.request(`/internal/triggers/${name}`, {
@@ -355,8 +343,6 @@ test("routes: 503 on a retryable failure, 200 on a permanent one", async () => {
   expect((await modAction("removelink")).status).toBe(200);
   expect((await postDelete("t3_abc")).status).toBe(200);
 });
-
-// --- Modmail alerts -----------------------------------------------------------------
 
 const mockModmail = () => vi.spyOn(reddit.modMail, "createModNotification").mockResolvedValue("conv_1");
 

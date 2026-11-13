@@ -1,13 +1,12 @@
-// What the relay needs to know about talking to Discord with a bot token. Deliberately free of Devvit
-// imports (it only needs `fetch`), so the same code can be reused outside the Devvit runtime.
+// No Devvit imports on purpose: this file is meant to be reusable outside the Devvit runtime.
 
 export const FETCH_TIMEOUT_MS = 10_000;
 
 const API = "https://discord.com/api/v10";
-// Discord asks bots to say who they are. Format: DiscordBot ($url, $versionNumber).
+// Discord asks bots to identify themselves: DiscordBot ($url, $versionNumber).
 const USER_AGENT = "DiscordBot (https://github.com/BoardyB/hikinghu-discord-relay, 1.0)";
 
-/** Retrying cannot help (bad token, wrong channel, 4xx from Discord). `hint` is mod-facing advice. */
+/** Retrying cannot help, so Reddit is not asked to. `hint` is advice for the mods. */
 export class PermanentError extends Error {
   override name = "PermanentError";
   constructor(
@@ -18,12 +17,9 @@ export class PermanentError extends Error {
   }
 }
 
-// --- configuration ------------------------------------------------------------------
-
 export type DiscordConfig = {
-  /** The bot token, without any "Bot " prefix. Never log it, never put it in a notice. */
+  /** Without the "Bot " prefix. Never log it or put it in a notice. */
   token: string;
-  /** The forum channel the posts are created in. */
   channelId: string;
 };
 
@@ -32,7 +28,6 @@ function cleanToken(raw: string): string {
   return raw.trim().replace(/^Bot\s+/i, "");
 }
 
-/** A readable complaint about a bot token setting, or undefined if it looks usable. */
 export function botTokenProblem(raw: string): string | undefined {
   const token = cleanToken(raw);
   if (!token) return "The bot token is empty.";
@@ -40,7 +35,6 @@ export function botTokenProblem(raw: string): string | undefined {
   return undefined;
 }
 
-/** A readable complaint about a forum channel id setting, or undefined if it looks usable. */
 export function channelIdProblem(raw: string): string | undefined {
   if (/^\d{17,20}$/.test(raw.trim())) return undefined;
   return (
@@ -49,7 +43,7 @@ export function channelIdProblem(raw: string): string | undefined {
   );
 }
 
-/** Throws a PermanentError (without echoing the token) when either setting is unusable. */
+// The error goes to Modmail, so it must never echo the token.
 export function parseConfig(rawToken: string, rawChannelId: string): DiscordConfig {
   const tokenProblem = botTokenProblem(rawToken);
   if (tokenProblem) throw new PermanentError(tokenProblem, "Open the app settings and paste the bot token again.");
@@ -58,12 +52,7 @@ export function parseConfig(rawToken: string, rawChannelId: string): DiscordConf
   return { token: cleanToken(rawToken), channelId: rawChannelId.trim() };
 }
 
-// --- requests -----------------------------------------------------------------------
-
-/**
- * One call to Discord's REST API as the bot. `path` is built from validated ids only, never from
- * free text. Rejects on network failure and timeout, resolves with any HTTP answer.
- */
+// `path` must only ever contain validated ids.
 export function discordRequest(config: DiscordConfig, method: "POST" | "DELETE", path: string, body?: unknown): Promise<Response> {
   return fetch(`${API}${path}`, {
     method,
@@ -77,12 +66,9 @@ export function discordRequest(config: DiscordConfig, method: "POST" | "DELETE",
   });
 }
 
-// --- answers ------------------------------------------------------------------------
-
 const TOKEN_REJECTED =
   "Discord rejected the bot token. In the Discord developer portal reset the bot's token and paste the new one into the app settings.";
 
-/** Advice for a failed attempt to create a post. */
 export function createRejectionHint(status: number): string {
   switch (status) {
     case 400:
@@ -101,7 +87,6 @@ export function createRejectionHint(status: number): string {
   }
 }
 
-/** Advice for a failed attempt to delete a thread. A 404 is not a failure there (it is already gone). */
 export function deleteRejectionHint(status: number): string | undefined {
   switch (status) {
     case 401:
@@ -109,15 +94,11 @@ export function deleteRejectionHint(status: number): string | undefined {
     case 403:
       return "The bot is not allowed to delete threads. On the forum channel give it the Manage Threads permission.";
     default:
-      return undefined; // PermanentError's general advice
+      return undefined;
   }
 }
 
-/**
- * The error for a Discord answer that was not a success. A rate limit or a server error may clear up,
- * so it is a plain Error and Reddit retries. Anything else is a PermanentError with the given
- * message and advice for the mods.
- */
+// 429 and 5xx may clear up, so they stay retryable. Everything else is permanent.
 export function discordError(response: Response, permanentMessage: string, hint?: string): Error {
   if (response.status === 429 || response.status >= 500) {
     const retryAfter = response.headers?.get("retry-after");

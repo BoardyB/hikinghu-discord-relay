@@ -11,12 +11,11 @@ import {
 import {clearThread, isMarkedRemoved, isSnowflake, loadThread, markRemoved, saveThread} from "./threads";
 
 const DEDUPE_KEY_PREFIX = "posted:";
-// Short lock while the Discord call is in flight, extended once it succeeds.
-// If the process dies mid-flight the lock expires by itself instead of
-// silently swallowing the post for 30 days.
+// Short lock while the Discord call is in flight, extended once it succeeds: a crash
+// mid-flight must not swallow the post for 30 days.
 const LOCK_TTL_SECONDS = 5 * 60;
 const DONE_TTL_SECONDS = 30 * 24 * 60 * 60;
-const THREAD_NAME_MAX = 90; // Discord allows 100; keep headroom.
+const THREAD_NAME_MAX = 90; // Discord allows 100; keep headroom
 
 export function buildThreadBody(
   title: string,
@@ -44,9 +43,7 @@ async function release(key: string): Promise<void> {
   await redis.del(key).catch((error) => console.error(`failed to release ${key}: ${describe(error)}`));
 }
 
-// The bot token and forum channel of this subreddit's installation, or undefined while either is
-// not set (installed but not configured yet, or paused by a mod: not an error). Throws
-// PermanentError when a value is set but cannot be right.
+// Empty means paused or not configured yet, which is not an error.
 async function readConfig(): Promise<DiscordConfig | undefined> {
   const [token, channelId] = await Promise.all([
     settings.get<string>("botToken"),
@@ -60,8 +57,6 @@ async function readConfig(): Promise<DiscordConfig | undefined> {
   return parseConfig(token, channelId);
 }
 
-// Resolves when the post was relayed or intentionally skipped.
-// Throws PermanentError when retrying is pointless, any other Error when it may help.
 export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<void> {
   const post = input.post;
   if (!post?.id || !post.title || !post.permalink) {
@@ -77,7 +72,7 @@ export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<vo
   }
 
   if (await isMarkedRemoved(post.id)) {
-    // Removed before the relay got to it (AutoModerator does this within moments): nothing to show in Discord.
+    // AutoModerator can remove a post within moments of its creation.
     console.log(`${post.id} was removed before it was relayed, skipping`);
     return;
   }
@@ -120,9 +115,8 @@ export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<vo
   throw discordError(response, `Discord rejected the request with ${response.status}`, createRejectionHint(response.status));
 }
 
-// Records which thread Discord created for the post, and deletes it right away if the post was
-// removed while the Discord call was in flight. Never throws: the post is already in Discord, and
-// failing here would only make Reddit retry a post that is now de-duplicated.
+// Never throws: the post is already in Discord, and failing here would only make Reddit retry
+// a post that is now de-duplicated.
 async function rememberThread(postId: string, config: DiscordConfig, response: Response): Promise<void> {
   let threadId: string | undefined;
   try {
@@ -148,8 +142,8 @@ async function rememberThread(postId: string, config: DiscordConfig, response: R
   }
 }
 
-// Deletes the whole forum post. (Deleting only its first message through a webhook leaves the thread
-// behind as "Original message was deleted", which is why the relay uses a bot with Manage Threads.)
+// Deletes the thread itself. A webhook could only delete the first message and would leave the
+// thread behind.
 async function deleteThread(config: DiscordConfig, postId: string, threadId: string): Promise<void> {
   let response: Response;
   try {
@@ -173,26 +167,24 @@ async function deleteThread(config: DiscordConfig, postId: string, threadId: str
   );
 }
 
-// Called when Reddit removed or deleted a post. Resolves when its thread was deleted or there was
-// nothing to delete. Throws PermanentError when retrying is pointless, any other Error when it may help.
 export async function handleRemoval(postId: string): Promise<void> {
   const config = await readConfig();
   if (!config) {
-    // Paused or not configured: nothing is being relayed, and there is no bot to delete with.
+    // Paused or not configured: nothing is relayed, and there is no bot to delete with.
     console.warn(`relay is not configured, cannot delete the thread of ${postId}`);
     return;
   }
 
-  // Mark first, look up second. The relay does the opposite on its side (records the thread first,
-  // checks the marker second), so whichever side comes later sees the other's write: either the
-  // lookup below finds the thread, or the relay sees the marker and deletes it. At worst both
-  // delete, and the second delete gets a harmless 404.
+  // Mark first, look up second. The relay does the opposite (records the thread first, checks the
+  // marker second), so whichever side comes later sees the other's write: the lookup below finds
+  // the thread, or the relay sees the marker and deletes it. At worst both delete, and the second
+  // delete gets a harmless 404.
   await markRemoved(postId);
 
   const threadId = await loadThread(postId);
   if (!threadId) {
-    // Never relayed, relayed before threads were recorded, already deleted, or still being relayed.
-    // The marker covers the last case: the relay deletes the thread as soon as it exists.
+    // Never relayed, already deleted, or still being relayed. The marker covers the last case:
+    // the relay deletes the thread as soon as it exists.
     console.log(`no thread recorded for ${postId}, nothing to delete`);
     return;
   }

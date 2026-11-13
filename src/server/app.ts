@@ -6,10 +6,8 @@ import { handleOnPostCreate, handleRemoval } from "./relay";
 
 export const app = new Hono();
 
-// Mod log names of the actions that take a post out of public view.
 const REMOVAL_ACTIONS = new Set(["removelink", "spamlink"]);
 
-// A trigger route: reads the JSON body (400 if there is none) and hands it to `handle`.
 function triggerRoute<T>(name: string, handle: (c: Context, input: T) => Promise<Response>) {
   return async (c: Context) => {
     let input: T;
@@ -23,8 +21,6 @@ function triggerRoute<T>(name: string, handle: (c: Context, input: T) => Promise
   };
 }
 
-// Runs one delivery of a trigger and answers the way Reddit expects: 2xx when it was handled or a
-// retry could not help (the mods are told by Modmail), 503 when a retry may.
 async function answerTrigger(
   c: Context,
   name: string,
@@ -38,7 +34,7 @@ async function answerTrigger(
     return c.json<TriggerResponse>({});
   } catch (error) {
     if (error instanceof PermanentError) {
-      // 2xx on purpose: a retry cannot fix this, so don't have Reddit hammer it.
+      // 2xx on purpose: Reddit retries anything else, and a retry cannot fix this.
       console.error(`${name}: ${id} failed permanently, not retrying: ${error.message}`);
       await alertPermanent(error);
       return c.json<TriggerResponse>({});
@@ -60,10 +56,9 @@ app.post("/internal/triggers/post-create", triggerRoute<OnPostCreateRequest>("po
   );
 }));
 
-// A mod (or AutoModerator) removed or spammed a post.
 app.post("/internal/triggers/mod-action", triggerRoute<OnModActionRequest>("mod-action", async (c, input) => {
   if (!input.action || !REMOVAL_ACTIONS.has(input.action)) {
-    return c.json<TriggerResponse>({}); // approvals, locks, bans and so on are not our business
+    return c.json<TriggerResponse>({});
   }
   const postId = input.targetPost?.id;
   if (!postId) {
@@ -80,7 +75,6 @@ app.post("/internal/triggers/mod-action", triggerRoute<OnModActionRequest>("mod-
   );
 }));
 
-// A post was deleted (by its author, a mod or an admin).
 app.post("/internal/triggers/post-delete", triggerRoute<OnPostDeleteRequest>("post-delete", async (c, input) => {
   const postId = input.postId;
   if (!postId) {
@@ -97,9 +91,7 @@ app.post("/internal/triggers/post-delete", triggerRoute<OnPostDeleteRequest>("po
   );
 }));
 
-// Called by Reddit when a mod saves a setting, so typos fail in the form instead of silently at
-// the next post. An empty value is allowed: it pauses the relay. The value is never logged, because
-// for the bot token it is a credential.
+// Never log `value`: for the bot token it is a credential.
 function validationRoute(setting: string, problemWith: (value: string) => string | undefined) {
   return async (c: Context) => {
     const { value } = await c.req.json<SettingsValidationRequest<string>>();

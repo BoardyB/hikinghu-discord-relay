@@ -1,11 +1,9 @@
 import {redis} from "@devvit/web/server";
 
-// Which Discord thread belongs to which Reddit post, so the thread can be deleted
-// when the post is removed. Only ids are stored, never titles or links.
+// Only ids are stored here, never titles or links (see PRIVACY.md).
 const THREAD_KEY_PREFIX = "thread:";
-// Written when a removal arrives and there is no thread to delete (yet). The relay
-// checks it before and right after creating a thread, so a post that is removed while
-// it is being relayed does not leave an orphan thread behind.
+// Left by a removal, so a post removed while it is being relayed does not leave an orphan
+// thread behind: the relay checks it before and right after creating the thread.
 const REMOVED_KEY_PREFIX = "removed:";
 
 export const THREAD_TTL_SECONDS = 30 * 24 * 60 * 60; // same as the de-duplication key
@@ -17,11 +15,7 @@ export function isSnowflake(value: unknown): value is string {
   return typeof value === "string" && SNOWFLAKE.test(value);
 }
 
-/**
- * Reddit events do not agree on how they spell a post id (`t3_abc` or `abc`), and the
- * removal events arrive from triggers other than the one that created the thread, so
- * every key here uses the bare id.
- */
+// Reddit's events spell post ids differently (`t3_abc` or `abc`), so every key uses the bare id.
 export function normalizePostId(id: string): string {
   return id.startsWith("t3_") ? id.slice("t3_".length) : id;
 }
@@ -30,7 +24,6 @@ function expiresIn(seconds: number): Date {
   return new Date(Date.now() + seconds * 1000);
 }
 
-/** In a forum channel a post is a thread, and the thread is a channel of its own: this is its id. */
 export async function saveThread(postId: string, threadId: string): Promise<void> {
   await redis.set(THREAD_KEY_PREFIX + normalizePostId(postId), threadId, {
     expiration: expiresIn(THREAD_TTL_SECONDS),

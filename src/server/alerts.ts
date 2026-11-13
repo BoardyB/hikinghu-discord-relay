@@ -2,8 +2,8 @@ import { reddit, redis } from "@devvit/web/server";
 import type { PermanentError } from "./discord";
 
 const ALERT_KEY = "alert:relay-failure";
-// Separate from ALERT_KEY on purpose: a failing delete must not use up the day's slot and
-// hide the more serious "new posts are not reaching Discord" notice.
+// Separate from ALERT_KEY on purpose: a failing delete must not hide the more serious
+// "new posts are not reaching Discord" notice.
 export const REMOVAL_ALERT_KEY = "alert:removal-failure";
 const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -28,8 +28,7 @@ export function removalFailureNotice(error: PermanentError, permalink?: string) 
   };
 }
 
-// Tells the mod team via Modmail when the relay is broken in a way retries cannot fix.
-// Rate limited so a broken setup (a revoked token, say) does not produce one message per post. Never throws.
+// Never throws: a failed notice must not fail the trigger.
 export async function alertMods(
   subredditId: string | undefined,
   notice: { subject: string; bodyMarkdown: string },

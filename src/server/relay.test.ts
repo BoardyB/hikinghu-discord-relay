@@ -29,7 +29,6 @@ const POST = {
 const event = (post: unknown, subreddit = "hikingHungary") =>
     ({ type: "PostCreate", post, subreddit: { id: "t5_test", name: subreddit } }) as never;
 
-// Discord answers a successful create with the thread it made (status 201).
 function mockFetch(status: number, headers: Record<string, string> = {}, body: unknown = { id: THREAD_ID }) {
   const fetchMock = vi.fn(async () =>
     new Response(status === 204 || status >= 400 ? null : JSON.stringify(body), { status, headers }));
@@ -147,8 +146,6 @@ test("skips gracefully when post payload is absent", async () => {
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-// --- configuration ----------------------------------------------------------------
-
 noTokenTest("pause: without a bot token nothing is sent and nothing fails", async () => {
   const fetchMock = mockFetch(201);
 
@@ -208,8 +205,6 @@ test("the bot token never reaches the logs", async () => {
   expect(logged.join("\n")).not.toContain(TOKEN);
 });
 
-// --- HTTP route -------------------------------------------------------------
-
 const post = (body: string) =>
     app.request("/internal/triggers/post-create", {
       method: "POST",
@@ -235,8 +230,6 @@ test("route: 503 on retryable failure, 200 on permanent failure", async () => {
   mockFetch(404);
   expect((await post(body)).status).toBe(200);
 });
-
-// --- settings validation ----------------------------------------------------
 
 const validate = async (setting: "bot-token" | "forum-channel-id", value?: string) => {
   const res = await app.request(`/internal/settings/${setting}`, {
@@ -264,8 +257,6 @@ test("validation: rejects a token with spaces and a channel id that is not a num
   expect(channel.success).toBe(false);
   expect(channel.error).toContain("Copy Channel ID");
 });
-
-// --- Modmail alerts ---------------------------------------------------------
 
 const triggerBody = JSON.stringify({ post: POST, subreddit: { id: "t5_test", name: "hikingHungary" } });
 const mockModmail = () => vi.spyOn(reddit.modMail, "createModNotification").mockResolvedValue("conv_1");

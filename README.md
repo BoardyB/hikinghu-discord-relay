@@ -195,6 +195,9 @@ src/server/removal.test.ts     unit tests for removing threads, the removal race
   and Devvit warns `scripts.dev exited before producing a first build`.
 - **Keep the app testable.** Routes live in `app.ts` and only `index.ts` starts a server, so tests can call
   `app.request(...)` without opening a port.
+- **Whether a failure is retried is decided by its error type.** Throw `PermanentError` (from `discord.ts`) only when
+  retrying cannot help: the routes then answer `200` and notify the mods by Modmail. Any other error answers `503`, so
+  Reddit retries, and `discordError()` already sorts Discord's answers this way.
 - **Subreddit settings cannot be secrets.** Devvit allows `isSecret` only on global (developer-set) settings, which
   would mean one bot token for every install. The per-subreddit token (so that every community brings its own bot) is
   therefore visible to that subreddit's moderators. The README tells them to keep the bot's permissions to the one
