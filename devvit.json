@@ -16,16 +16,25 @@
     "reddit": true
   },
   "triggers": {
-    "onPostCreate": "/internal/triggers/post-create"
+    "onPostCreate": "/internal/triggers/post-create",
+    "onModAction": "/internal/triggers/mod-action",
+    "onPostDelete": "/internal/triggers/post-delete"
   },
   "settings": {
     "subreddit": {
-      "discordWebhookUrl": {
+      "botToken": {
         "type": "string",
-        "label": "Discord webhook URL",
-        "helpText": "Discord channel webhook. In Discord: channel settings \u2192 Integrations \u2192 Webhooks. The channel must be a Forum channel. Leave empty to pause relaying.",
-        "placeholder": "https://discord.com/api/webhooks/...",
-        "validationEndpoint": "/internal/settings/webhook-url"
+        "label": "Discord bot token",
+        "helpText": "Token of the Discord bot that creates and deletes the posts (see the README for the bot's permissions). Reddit shows this setting to every moderator of the subreddit. Leave empty to pause relaying.",
+        "placeholder": "paste the bot token",
+        "validationEndpoint": "/internal/settings/bot-token"
+      },
+      "forumChannelId": {
+        "type": "string",
+        "label": "Discord forum channel ID",
+        "helpText": "The Forum channel the posts go to. In Discord: turn on Developer Mode, right-click the forum channel, Copy Channel ID. Leave empty to pause relaying.",
+        "placeholder": "e.g. 123456789012345678",
+        "validationEndpoint": "/internal/settings/forum-channel-id"
       }
     }
   },

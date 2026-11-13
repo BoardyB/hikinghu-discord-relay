@@ -1,5 +1,14 @@
 import {redis, settings} from "@devvit/web/server";
 import type {OnPostCreateRequest} from "@devvit/web/shared";
+import {
+  createRejectionHint,
+  deleteRejectionHint,
+  type DiscordConfig,
+  discordError,
+  discordRequest,
+  parseConfig,
+} from "./discord";
+import {clearThread, isMarkedRemoved, isSnowflake, loadThread, markRemoved, saveThread} from "./threads";
 
 const DEDUPE_KEY_PREFIX = "posted:";
 // Short lock while the Discord call is in flight, extended once it succeeds.
@@ -7,35 +16,9 @@ const DEDUPE_KEY_PREFIX = "posted:";
 // silently swallowing the post for 30 days.
 const LOCK_TTL_SECONDS = 5 * 60;
 const DONE_TTL_SECONDS = 30 * 24 * 60 * 60;
-const FETCH_TIMEOUT_MS = 10_000;
 const THREAD_NAME_MAX = 90; // Discord allows 100; keep headroom.
 
-/** Retrying cannot help (bad webhook, 4xx from Discord). `hint` is mod-facing advice. */
-export class PermanentError extends Error {
-  override name = "PermanentError";
-  constructor(
-    message: string,
-    readonly hint = "Open the app settings and check the Discord webhook URL.",
-  ) {
-    super(message);
-  }
-}
-
-function discordRejectionHint(status: number): string {
-  switch (status) {
-    case 400:
-      return "Discord refused the message. Most often the webhook's channel is not a Forum channel (only forum channels can create threads).";
-    case 401:
-    case 403:
-      return "Discord rejected the webhook token. Create a new webhook and paste its URL into the app settings.";
-    case 404:
-      return "The webhook no longer exists (it was probably deleted). Create a new one and paste its URL into the app settings.";
-    default:
-      return "Check that the webhook still works in Discord, then re-paste its URL in the app settings.";
-  }
-}
-
-export function buildWebhookBody(
+export function buildThreadBody(
   title: string,
   permalink: string,
   subredditName: string,
@@ -43,23 +26,12 @@ export function buildWebhookBody(
   // Spread by code point so an emoji is never cut in half at the boundary.
   const threadName = [...title.trim()].slice(0, THREAD_NAME_MAX).join("") || "New post";
   return {
-    thread_name: threadName,
-    content: `**New post on r/${subredditName}**\nhttps://www.reddit.com${permalink}`,
-    allowed_mentions: { parse: [] },
+    name: threadName,
+    message: {
+      content: `**New post on r/${subredditName}**\nhttps://www.reddit.com${permalink}`,
+      allowed_mentions: { parse: [] },
+    },
   };
-}
-
-export function parseWebhookUrl(raw: string): URL {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new PermanentError("The webhook URL is not a valid URL.");
-  }
-  if (url.protocol !== "https:" || url.host !== "discord.com" || !url.pathname.startsWith("/api/webhooks/")) {
-    throw new PermanentError(`The webhook URL must start with https://discord.com/api/webhooks/ (got host ${url.host}).`);
-  }
-  return url;
 }
 
 function describe(error: unknown): string {
@@ -72,6 +44,22 @@ async function release(key: string): Promise<void> {
   await redis.del(key).catch((error) => console.error(`failed to release ${key}: ${describe(error)}`));
 }
 
+// The bot token and forum channel of this subreddit's installation, or undefined while either is
+// not set (installed but not configured yet, or paused by a mod: not an error). Throws
+// PermanentError when a value is set but cannot be right.
+async function readConfig(): Promise<DiscordConfig | undefined> {
+  const [token, channelId] = await Promise.all([
+    settings.get<string>("botToken"),
+    settings.get<string>("forumChannelId"),
+  ]);
+  if (!token || !channelId) {
+    const missing = [!token && "botToken", !channelId && "forumChannelId"].filter(Boolean).join(" and ");
+    console.warn(`the ${missing} setting is empty`);
+    return undefined;
+  }
+  return parseConfig(token, channelId);
+}
+
 // Resolves when the post was relayed or intentionally skipped.
 // Throws PermanentError when retrying is pointless, any other Error when it may help.
 export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<void> {
@@ -82,13 +70,17 @@ export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<vo
   }
 
   const subredditName = input.subreddit?.name ?? "";
-  const rawUrl = await settings.get<string>("discordWebhookUrl");
-  if (!rawUrl) {
-    // Installed but not configured yet (or paused by a mod): not an error.
-    console.warn(`no webhook configured for r/${subredditName}, skipping ${post.id}`);
+  const config = await readConfig();
+  if (!config) {
+    console.warn(`relay is not configured for r/${subredditName}, skipping ${post.id}`);
     return;
   }
-  const webhookUrl = parseWebhookUrl(rawUrl);
+
+  if (await isMarkedRemoved(post.id)) {
+    // Removed before the relay got to it (AutoModerator does this within moments): nothing to show in Discord.
+    console.log(`${post.id} was removed before it was relayed, skipping`);
+    return;
+  }
 
   const key = DEDUPE_KEY_PREFIX + post.id;
   const acquired = await redis.set(key, "1", {
@@ -103,30 +95,107 @@ export async function handleOnPostCreate(input: OnPostCreateRequest): Promise<vo
   console.log(`sending ${post.id} to Discord`);
   let response: Response;
   try {
-    response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildWebhookBody(post.title, post.permalink, subredditName)),
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
+    response = await discordRequest(
+      config,
+      "POST",
+      `/channels/${config.channelId}/threads`,
+      buildThreadBody(post.title, post.permalink, subredditName),
+    );
   } catch (error) {
     await release(key);
     throw new Error(`discord fetch failed for ${post.id}: ${describe(error)}`);
   }
 
   console.log(`Discord answered ${response.status} for ${post.id}`);
-  if (response.status === 200 || response.status === 204) {
+  if (response.ok) {
     await redis
       .expire(key, DONE_TTL_SECONDS)
       .catch((error) => console.error(`failed to extend ${key}: ${describe(error)}`));
     console.log(`relayed ${post.id} to Discord`);
+    await rememberThread(post.id, config, response);
     return;
   }
 
   await release(key);
-  const retryAfter = response.headers?.get("retry-after");
-  if (response.status === 429 || response.status >= 500) {
-    throw new Error(`Discord returned ${response.status}${retryAfter ? ` (retry-after ${retryAfter}s)` : ""}`);
+  throw discordError(response, `Discord rejected the request with ${response.status}`, createRejectionHint(response.status));
+}
+
+// Records which thread Discord created for the post, and deletes it right away if the post was
+// removed while the Discord call was in flight. Never throws: the post is already in Discord, and
+// failing here would only make Reddit retry a post that is now de-duplicated.
+async function rememberThread(postId: string, config: DiscordConfig, response: Response): Promise<void> {
+  let threadId: string | undefined;
+  try {
+    // Discord answers with the thread it created, and a forum post's thread is a channel with its own id.
+    const body = (await response.json()) as { id?: unknown } | null;
+    if (isSnowflake(body?.id)) threadId = body.id;
+  } catch {
+    // No body, or not JSON.
   }
-  throw new PermanentError(`Discord rejected the webhook with ${response.status}`, discordRejectionHint(response.status));
+  if (!threadId) {
+    console.warn(`Discord did not say which thread it created for ${postId}, so it cannot be deleted if the post is removed`);
+    return;
+  }
+
+  try {
+    await saveThread(postId, threadId);
+    if (await isMarkedRemoved(postId)) {
+      console.log(`${postId} was removed while it was being relayed, deleting its thread`);
+      await deleteThread(config, postId, threadId);
+    }
+  } catch (error) {
+    console.error(`could not record or clean up the thread of ${postId}: ${describe(error)}`);
+  }
+}
+
+// Deletes the whole forum post. (Deleting only its first message through a webhook leaves the thread
+// behind as "Original message was deleted", which is why the relay uses a bot with Manage Threads.)
+async function deleteThread(config: DiscordConfig, postId: string, threadId: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await discordRequest(config, "DELETE", `/channels/${threadId}`);
+  } catch (error) {
+    throw new Error(`discord delete failed for ${postId}: ${describe(error)}`);
+  }
+
+  console.log(`Discord answered ${response.status} to deleting the thread of ${postId}`);
+  if (response.ok || response.status === 404) {
+    // 404 means the thread is already gone, which is the outcome we wanted.
+    await clearThread(postId);
+    console.log(`the Discord thread of ${postId} is gone`);
+    return;
+  }
+
+  throw discordError(
+    response,
+    `Discord refused to delete the thread of a removed post (${response.status})`,
+    deleteRejectionHint(response.status),
+  );
+}
+
+// Called when Reddit removed or deleted a post. Resolves when its thread was deleted or there was
+// nothing to delete. Throws PermanentError when retrying is pointless, any other Error when it may help.
+export async function handleRemoval(postId: string): Promise<void> {
+  const config = await readConfig();
+  if (!config) {
+    // Paused or not configured: nothing is being relayed, and there is no bot to delete with.
+    console.warn(`relay is not configured, cannot delete the thread of ${postId}`);
+    return;
+  }
+
+  // Mark first, look up second. The relay does the opposite on its side (records the thread first,
+  // checks the marker second), so whichever side comes later sees the other's write: either the
+  // lookup below finds the thread, or the relay sees the marker and deletes it. At worst both
+  // delete, and the second delete gets a harmless 404.
+  await markRemoved(postId);
+
+  const threadId = await loadThread(postId);
+  if (!threadId) {
+    // Never relayed, relayed before threads were recorded, already deleted, or still being relayed.
+    // The marker covers the last case: the relay deletes the thread as soon as it exists.
+    console.log(`no thread recorded for ${postId}, nothing to delete`);
+    return;
+  }
+
+  await deleteThread(config, postId, threadId);
 }
