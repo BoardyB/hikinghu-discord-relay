@@ -1,56 +1,37 @@
 import { createDevvitTest } from "@devvit/test/server/vitest"
-import { reddit, redis } from "@devvit/web/server"
+import { redis } from "@devvit/web/server"
 import { expect, vi } from "vitest"
-import { app } from "./app"
 import { PermanentError } from "../discord/client"
 import { handleOnPostCreate, handleRemoval } from "./relay"
-
-const TOKEN = "MTIzNDU2Nzg5.Gabcde.super-secret-token-value"
-// Different values on purpose, so a test fails if the forum channel is used where the thread belongs.
-const CHANNEL_ID = "1100000000000000001"
-const THREAD_ID = "1200000000000000002"
-const DELETE_URL = `https://discord.com/api/v10/channels/${THREAD_ID}`
+import {
+  CHANNEL_ID,
+  createEvent,
+  CREATED,
+  DELETED,
+  DELETE_URL,
+  deletes,
+  discord,
+  fetchFails,
+  mockDiscord,
+  mockModmail,
+  POST,
+  route,
+  SUBREDDIT,
+  THREAD_ID,
+  TOKEN,
+} from "./test-helpers"
 
 const settings = { botToken: TOKEN, forumChannelId: CHANNEL_ID }
 const test = createDevvitTest({ settings })
 const pausedTest = createDevvitTest({ settings: { ...settings, botToken: "" } })
 
-const POST = {
-  id: "t3_abc",
-  title: "My trip to Dobogókő",
-  permalink: "/r/hikingHungary/comments/abc/my_trip/",
-}
-const SUBREDDIT = { id: "t5_test", name: "hikingHungary" }
-
-type Reply = { status: number; body?: unknown; headers?: Record<string, string> }
-type Call = { url: string; init: RequestInit }
-
-const CREATED: Reply = { status: 201, body: { id: THREAD_ID, parent_id: CHANNEL_ID } }
-const DELETED: Reply = { status: 200, body: { id: THREAD_ID } }
-
-function mockDiscord(handler: (call: Call) => Reply | Promise<Reply>): Call[] {
-  const calls: Call[] = []
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const call = { url: String(input), init: init ?? {} }
-    calls.push(call)
-    const { status, body, headers } = await handler(call)
-    return new Response(body === undefined || status === 204 ? null : JSON.stringify(body), {
-      status,
-      headers,
-    })
-  })
-  return calls
-}
-
-const discord = (remove: Reply = DELETED) =>
-  mockDiscord(({ init }) => (init.method === "DELETE" ? remove : CREATED))
-
-const deletes = (calls: Call[]) => calls.filter((call) => call.init.method === "DELETE")
-
-const createEvent = (post: unknown = POST) =>
-  ({ type: "PostCreate", post, subreddit: SUBREDDIT }) as never
 const relayPost = () => handleOnPostCreate(createEvent())
 const storedThread = () => redis.get("thread:abc")
+
+const modAction = (action: string, targetPost: unknown = POST) =>
+  route("mod-action", { type: "ModAction", action, targetPost, subreddit: SUBREDDIT })
+const postDelete = (postId: string) =>
+  route("post-delete", { type: "PostDelete", postId, source: 1, reason: 0, subreddit: SUBREDDIT })
 
 test("create: records the thread Discord answered with", async () => {
   discord()
@@ -138,9 +119,7 @@ test("removal: 5xx and 429 are retryable and keep the record for the retry", asy
 test("removal: a network failure is retryable", async () => {
   discord()
   await relayPost()
-  vi.spyOn(globalThis, "fetch").mockRejectedValue(
-    new TypeError("fetch failed", { cause: new Error("ECONNRESET") }),
-  )
+  fetchFails()
 
   const error = await handleRemoval("t3_abc").catch((e) => e)
 
@@ -275,18 +254,6 @@ test("race: a failing clean-up never breaks the create", async () => {
   expect(await redis.get("posted:t3_abc")).toBeTruthy()
 })
 
-const route = (name: string, body: unknown) =>
-  app.request(`/internal/triggers/${name}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  })
-
-const modAction = (action: string, targetPost: unknown = POST) =>
-  route("mod-action", { type: "ModAction", action, targetPost, subreddit: SUBREDDIT })
-const postDelete = (postId: string) =>
-  route("post-delete", { type: "PostDelete", postId, source: 1, reason: 0, subreddit: SUBREDDIT })
-
 for (const action of ["removelink", "spamlink"]) {
   test(`route mod-action: ${action} deletes the thread`, async () => {
     const calls = discord()
@@ -354,9 +321,6 @@ test("routes: 503 on a retryable failure, 200 on a permanent one", async () => {
   expect((await modAction("removelink")).status).toBe(200)
   expect((await postDelete("t3_abc")).status).toBe(200)
 })
-
-const mockModmail = () =>
-  vi.spyOn(reddit.modMail, "createModNotification").mockResolvedValue("conv_1")
 
 test("alert: a permanent delete failure sends one Modmail notice with its own text", async () => {
   const modmail = mockModmail()

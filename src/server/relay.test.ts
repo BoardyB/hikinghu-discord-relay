@@ -4,11 +4,20 @@ import { expect, vi } from "vitest"
 import { app } from "./app"
 import { parseConfig, PermanentError } from "../discord/client"
 import { buildThreadBody, handleOnPostCreate } from "./relay"
-
-const TOKEN = "MTIzNDU2Nzg5.Gabcde.super-secret-token-value"
-const CHANNEL_ID = "1100000000000000001"
-const THREAD_ID = "1200000000000000002"
-const CREATE_URL = `https://discord.com/api/v10/channels/${CHANNEL_ID}/threads`
+import {
+  CHANNEL_ID,
+  CREATE_URL,
+  createEvent,
+  discord,
+  fetchFails,
+  mockDiscord,
+  mockModmail,
+  POST,
+  route,
+  SUBREDDIT,
+  TOKEN,
+  type Call,
+} from "./test-helpers"
 
 const test = createDevvitTest({
   settings: { botToken: TOKEN, forumChannelId: CHANNEL_ID },
@@ -22,46 +31,21 @@ const badChannelTest = createDevvitTest({
   settings: { botToken: TOKEN, forumChannelId: "general" },
 })
 
-const POST = {
-  id: "t3_abc",
-  title: "My trip to Dobogókő",
-  permalink: "/r/hikingHungary/comments/abc/my_trip/",
-}
-
-const event = (post: unknown, subreddit = "hikingHungary") =>
-  ({ type: "PostCreate", post, subreddit: { id: "t5_test", name: subreddit } }) as never
-
-function mockFetch(
-  status: number,
-  headers: Record<string, string> = {},
-  body: unknown = { id: THREAD_ID },
-) {
-  const fetchMock = vi.fn(
-    async () =>
-      new Response(status === 204 || status >= 400 ? null : JSON.stringify(body), {
-        status,
-        headers,
-      }),
-  )
-  vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock)
-  return fetchMock
-}
-
-const requestOf = (fetchMock: ReturnType<typeof mockFetch>, index = 0) =>
-  fetchMock.mock.calls[index] as unknown as [string, RequestInit]
+const authOf = (call: Call) => (call.init.headers as Record<string, string>).Authorization
 
 test("creates a forum post as the bot", async () => {
-  const fetchMock = mockFetch(201)
+  const calls = discord()
 
-  await expect(handleOnPostCreate(event(POST))).resolves.toBeUndefined()
+  await expect(handleOnPostCreate(createEvent())).resolves.toBeUndefined()
 
-  expect(fetchMock).toHaveBeenCalledTimes(1)
-  const [url, init] = requestOf(fetchMock)
-  expect(url).toBe(CREATE_URL)
-  expect(init.method).toBe("POST")
-  expect((init.headers as Record<string, string>).Authorization).toBe(`Bot ${TOKEN}`)
-  expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json")
-  expect(JSON.parse(String(init.body))).toEqual({
+  expect(calls).toHaveLength(1)
+  expect(calls[0]!.url).toBe(CREATE_URL)
+  expect(calls[0]!.init.method).toBe("POST")
+  expect(authOf(calls[0]!)).toBe(`Bot ${TOKEN}`)
+  expect((calls[0]!.init.headers as Record<string, string>)["Content-Type"]).toBe(
+    "application/json",
+  )
+  expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
     name: "My trip to Dobogókő",
     message: {
       content:
@@ -74,22 +58,20 @@ test("creates a forum post as the bot", async () => {
 prefixedTokenTest(
   "a token pasted with the 'Bot ' prefix is still sent as 'Bot <token>'",
   async () => {
-    const fetchMock = mockFetch(201)
+    const calls = discord()
 
-    await handleOnPostCreate(event(POST))
+    await handleOnPostCreate(createEvent())
 
-    expect((requestOf(fetchMock)[1].headers as Record<string, string>).Authorization).toBe(
-      `Bot ${TOKEN}`,
-    )
+    expect(authOf(calls[0]!)).toBe(`Bot ${TOKEN}`)
   },
 )
 
 test("uses the subreddit name from the event in the message", async () => {
-  const fetchMock = mockFetch(201)
+  const calls = discord()
 
-  await handleOnPostCreate(event(POST, "SomeOtherHikingSub"))
+  await handleOnPostCreate(createEvent(POST, { id: "t5_test", name: "SomeOtherHikingSub" }))
 
-  const body = JSON.parse(String(requestOf(fetchMock)[1].body))
+  const body = JSON.parse(String(calls[0]!.init.body))
   expect(body.message.content).toContain("r/SomeOtherHikingSub")
 })
 
@@ -104,94 +86,92 @@ test("an empty title still gets a thread name", () => {
 })
 
 test("dedupes duplicate deliveries", async () => {
-  const fetchMock = mockFetch(201)
+  const calls = discord()
 
-  await handleOnPostCreate(event(POST))
-  await handleOnPostCreate(event(POST))
+  await handleOnPostCreate(createEvent())
+  await handleOnPostCreate(createEvent())
 
-  expect(fetchMock).toHaveBeenCalledOnce()
+  expect(calls).toHaveLength(1)
 })
 
 test("keeps the dedupe key for the long TTL after success", async () => {
-  mockFetch(201)
+  discord()
 
-  await handleOnPostCreate(event(POST))
+  await handleOnPostCreate(createEvent())
 
   expect(await redis.get("posted:t3_abc")).toBeTruthy()
 })
 
 test("releases the key and throws a retryable error on 5xx", async () => {
-  mockFetch(500)
+  mockDiscord(() => ({ status: 500 }))
 
-  await expect(handleOnPostCreate(event(POST))).rejects.toThrow("Discord returned 500")
+  await expect(handleOnPostCreate(createEvent())).rejects.toThrow("Discord returned 500")
   expect(await redis.get("posted:t3_abc")).toBeFalsy()
 
-  const succeeding = mockFetch(201)
-  await handleOnPostCreate(event(POST))
-  expect(succeeding).toHaveBeenCalledOnce()
+  const succeeding = discord()
+  await handleOnPostCreate(createEvent())
+  expect(succeeding).toHaveLength(1)
 })
 
 test("429 is retryable and surfaces retry-after", async () => {
-  mockFetch(429, { "retry-after": "2" })
+  mockDiscord(() => ({ status: 429, headers: { "retry-after": "2" } }))
 
-  const error = await handleOnPostCreate(event(POST)).catch((e) => e)
+  const error = await handleOnPostCreate(createEvent()).catch((e) => e)
   expect(error).not.toBeInstanceOf(PermanentError)
   expect(String(error)).toContain("retry-after 2s")
 })
 
 test("4xx from Discord is permanent and releases the key", async () => {
-  mockFetch(404)
+  mockDiscord(() => ({ status: 404 }))
 
-  await expect(handleOnPostCreate(event(POST))).rejects.toBeInstanceOf(PermanentError)
+  await expect(handleOnPostCreate(createEvent())).rejects.toBeInstanceOf(PermanentError)
   expect(await redis.get("posted:t3_abc")).toBeFalsy()
 })
 
 test("network failure releases the key and is retryable", async () => {
-  vi.spyOn(globalThis, "fetch").mockRejectedValue(
-    new TypeError("fetch failed", { cause: new Error("ECONNRESET") }),
-  )
+  fetchFails()
 
-  const error = await handleOnPostCreate(event(POST)).catch((e) => e)
+  const error = await handleOnPostCreate(createEvent()).catch((e) => e)
   expect(error).not.toBeInstanceOf(PermanentError)
   expect(String(error)).toContain("ECONNRESET")
   expect(await redis.get("posted:t3_abc")).toBeFalsy()
 })
 
 test("skips gracefully when post payload is absent", async () => {
-  const fetchMock = mockFetch(201)
+  const calls = discord()
 
-  await expect(handleOnPostCreate(event(null))).resolves.toBeUndefined()
+  await expect(handleOnPostCreate(createEvent(null))).resolves.toBeUndefined()
 
-  expect(fetchMock).not.toHaveBeenCalled()
+  expect(calls).toHaveLength(0)
 })
 
 noTokenTest("pause: without a bot token nothing is sent and nothing fails", async () => {
-  const fetchMock = mockFetch(201)
+  const calls = discord()
 
-  await expect(handleOnPostCreate(event(POST))).resolves.toBeUndefined()
+  await expect(handleOnPostCreate(createEvent())).resolves.toBeUndefined()
 
-  expect(fetchMock).not.toHaveBeenCalled()
+  expect(calls).toHaveLength(0)
   expect(await redis.get("posted:t3_abc")).toBeFalsy() // the post can still be relayed once configured
 })
 
 noChannelTest("pause: without a forum channel nothing is sent and nothing fails", async () => {
-  const fetchMock = mockFetch(201)
+  const calls = discord()
 
-  await expect(handleOnPostCreate(event(POST))).resolves.toBeUndefined()
+  await expect(handleOnPostCreate(createEvent())).resolves.toBeUndefined()
 
-  expect(fetchMock).not.toHaveBeenCalled()
+  expect(calls).toHaveLength(0)
 })
 
 badChannelTest(
   "a forum channel id that cannot be right is a permanent failure and nothing is sent",
   async () => {
-    const fetchMock = mockFetch(201)
+    const calls = discord()
 
-    const error = await handleOnPostCreate(event(POST)).catch((e) => e)
+    const error = await handleOnPostCreate(createEvent()).catch((e) => e)
 
     expect(error).toBeInstanceOf(PermanentError)
     expect(error.hint).toContain("forum channel ID")
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(calls).toHaveLength(0)
   },
 )
 
@@ -226,44 +206,37 @@ test("the bot token never reaches the logs", async () => {
   }
   vi.spyOn(reddit.modMail, "createModNotification").mockResolvedValue("conv_1")
 
-  mockFetch(201)
-  await handleOnPostCreate(event(POST))
-  mockFetch(401)
-  await post(triggerBody)
-  mockFetch(500)
-  await post(triggerBody)
+  discord()
+  await handleOnPostCreate(createEvent())
+  mockDiscord(() => ({ status: 401 }))
+  await route("post-create", triggerBody)
+  mockDiscord(() => ({ status: 500 }))
+  await route("post-create", triggerBody)
   await validate("bot-token", `Bot ${TOKEN} extra`)
 
   expect(logged.length).toBeGreaterThan(0)
   expect(logged.join("\n")).not.toContain(TOKEN)
 })
 
-const post = (body: string) =>
-  app.request("/internal/triggers/post-create", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body,
-  })
-
 test("route: 200 on success", async () => {
-  mockFetch(201)
+  discord()
   expect(
-    (await post(JSON.stringify({ post: POST, subreddit: { name: "hikingHungary" } }))).status,
+    (await route("post-create", { post: POST, subreddit: { name: "hikingHungary" } })).status,
   ).toBe(200)
 })
 
 test("route: 400 on malformed JSON", async () => {
-  expect((await post("{nope")).status).toBe(400)
+  expect((await route("post-create", "{nope")).status).toBe(400)
 })
 
 test("route: 503 on retryable failure, 200 on permanent failure", async () => {
-  const body = JSON.stringify({ post: POST, subreddit: { name: "hikingHungary" } })
+  const body = { post: POST, subreddit: { name: "hikingHungary" } }
 
-  mockFetch(500)
-  expect((await post(body)).status).toBe(503)
+  mockDiscord(() => ({ status: 500 }))
+  expect((await route("post-create", body)).status).toBe(503)
 
-  mockFetch(404)
-  expect((await post(body)).status).toBe(200)
+  mockDiscord(() => ({ status: 404 }))
+  expect((await route("post-create", body)).status).toBe(200)
 })
 
 const validate = async (setting: "bot-token" | "forum-channel-id", value?: string) => {
@@ -296,18 +269,13 @@ test("validation: rejects a token with spaces and a channel id that is not a num
   expect(channel.error).toContain("Copy Channel ID")
 })
 
-const triggerBody = JSON.stringify({
-  post: POST,
-  subreddit: { id: "t5_test", name: "hikingHungary" },
-})
-const mockModmail = () =>
-  vi.spyOn(reddit.modMail, "createModNotification").mockResolvedValue("conv_1")
+const triggerBody = JSON.stringify({ post: POST, subreddit: SUBREDDIT })
 
 test("alert: permanent failure sends one Modmail notice with a hint and the post link", async () => {
   const modmail = mockModmail()
-  mockFetch(404)
+  mockDiscord(() => ({ status: 404 }))
 
-  expect((await post(triggerBody)).status).toBe(200)
+  expect((await route("post-create", triggerBody)).status).toBe(200)
 
   expect(modmail).toHaveBeenCalledOnce()
   const arg = modmail.mock.calls[0]![0]
@@ -329,8 +297,8 @@ test("alert: the advice depends on what Discord said", async () => {
 
   for (const status of Object.keys(advice).map(Number)) {
     await redis.del("alert:relay-failure") // one notice a day, so lift the limit between the cases
-    mockFetch(status)
-    await post(triggerBody)
+    mockDiscord(() => ({ status }))
+    await route("post-create", triggerBody)
   }
 
   const bodies = modmail.mock.calls.map(([arg]) => arg.bodyMarkdown)
@@ -341,14 +309,12 @@ test("alert: the advice depends on what Discord said", async () => {
 
 test("alert: a broken setup does not produce one message per post", async () => {
   const modmail = mockModmail()
-  mockFetch(401)
+  mockDiscord(() => ({ status: 401 }))
 
-  await post(triggerBody)
-  await post(
-    JSON.stringify({
-      post: { ...POST, id: "t3_def" },
-      subreddit: { id: "t5_test", name: "hikingHungary" },
-    }),
+  await route("post-create", triggerBody)
+  await route(
+    "post-create",
+    JSON.stringify({ post: { ...POST, id: "t3_def" }, subreddit: SUBREDDIT }),
   )
 
   expect(modmail).toHaveBeenCalledOnce()
@@ -357,19 +323,19 @@ test("alert: a broken setup does not produce one message per post", async () => 
 test("alert: transient failures (5xx, 429) do not alert mods", async () => {
   const modmail = mockModmail()
 
-  mockFetch(500)
-  await post(triggerBody)
-  mockFetch(429, { "retry-after": "1" })
-  await post(triggerBody)
+  mockDiscord(() => ({ status: 500 }))
+  await route("post-create", triggerBody)
+  mockDiscord(() => ({ status: 429, headers: { "retry-after": "1" } }))
+  await route("post-create", triggerBody)
 
   expect(modmail).not.toHaveBeenCalled()
 })
 
 test("alert: no subreddit id in the payload means no alert and no crash", async () => {
   const modmail = mockModmail()
-  mockFetch(404)
+  mockDiscord(() => ({ status: 404 }))
 
-  expect((await post(JSON.stringify({ post: POST }))).status).toBe(200)
+  expect((await route("post-create", JSON.stringify({ post: POST }))).status).toBe(200)
 
   expect(modmail).not.toHaveBeenCalled()
 })
@@ -377,11 +343,11 @@ test("alert: no subreddit id in the payload means no alert and no crash", async 
 test("alert: a Modmail failure never breaks the trigger and re-arms the alert", async () => {
   const modmail = mockModmail()
   modmail.mockRejectedValueOnce(new Error("modmail down"))
-  mockFetch(404)
+  mockDiscord(() => ({ status: 404 }))
 
-  expect((await post(triggerBody)).status).toBe(200) // send fails, trigger still OK
+  expect((await route("post-create", triggerBody)).status).toBe(200) // send fails, trigger still OK
   expect(modmail).toHaveBeenCalledTimes(1)
 
-  await post(triggerBody) // cooldown was released, so the next failure alerts again
+  await route("post-create", triggerBody) // cooldown was released, so the next failure alerts again
   expect(modmail).toHaveBeenCalledTimes(2)
 })
