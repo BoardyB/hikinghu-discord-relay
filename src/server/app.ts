@@ -1,7 +1,7 @@
 import type { OnModActionRequest, OnPostCreateRequest, OnPostDeleteRequest, SettingsValidationRequest, SettingsValidationResponse, TriggerResponse } from "@devvit/web/shared";
 import {type Context, Hono} from "hono";
 import { alertMods, failureNotice, REMOVAL_ALERT_KEY, removalFailureNotice } from "./alerts";
-import { botTokenProblem, channelIdProblem, PermanentError } from "./discord";
+import { botTokenProblem, channelIdProblem, PermanentError } from "../discord/client";
 import { handleOnPostCreate, handleRemoval } from "./relay";
 
 export const app = new Hono();

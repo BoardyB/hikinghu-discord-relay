@@ -7,7 +7,7 @@ import {
   discordError,
   discordRequest,
   parseConfig,
-} from "./discord";
+} from "../discord/client";
 import {clearThread, isMarkedRemoved, isSnowflake, loadThread, markRemoved, saveThread} from "./threads";
 
 const DEDUPE_KEY_PREFIX = "posted:";

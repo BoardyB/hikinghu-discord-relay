@@ -1,5 +1,5 @@
 import { reddit, redis } from "@devvit/web/server";
-import type { PermanentError } from "./discord";
+import type { PermanentError } from "../discord/client";
 
 const ALERT_KEY = "alert:relay-failure";
 // Separate from ALERT_KEY on purpose: a failing delete must not hide the more serious

@@ -2,7 +2,7 @@ import { createDevvitTest } from "@devvit/test/server/vitest";
 import { reddit, redis } from "@devvit/web/server";
 import { expect, vi } from "vitest";
 import { app } from "./app";
-import { parseConfig, PermanentError } from "./discord";
+import { parseConfig, PermanentError } from "../discord/client";
 import { buildThreadBody, handleOnPostCreate } from "./relay";
 
 const TOKEN = "MTIzNDU2Nzg5.Gabcde.super-secret-token-value";

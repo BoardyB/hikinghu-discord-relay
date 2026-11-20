@@ -7,11 +7,16 @@ replaces the old RSS-polling.
 
 Reddit hosts and runs the server. There is nothing to deploy or keep running yourself.
 
+This repository also contains a **thread cleanup workflow** that runs on GitHub Actions and deletes stale threads from
+the forum channel. It is separate from the app (it never touches Reddit) and is documented in
+[Thread cleanup workflow](#thread-cleanup-workflow).
+
 - [How it works](#how-it-works)
 - [For moderators: setup and support](#for-moderators-setup-and-support)
 - [For developers](#for-developers)
 - [Publishing and handover](#publishing-and-handover)
 - [Fetch domains](#fetch-domains)
+- [Thread cleanup workflow](#thread-cleanup-workflow)
 - [Known limitations](#known-limitations)
 
 ---
@@ -163,7 +168,8 @@ Still stuck? Contact the maintainer: **[https://www.reddit.com/user/boardyb/]**.
 npm install
 npx devvit login          # once
 npm test                  # typecheck + unit tests (no network, no Reddit)
-npm run build             # bundle the server to dist/server/index.cjs
+npm run build             # bundle the server and the cleanup script to dist/
+npm run build:cleanup     # only the cleanup bundle: dist/cleanup/index.cjs
 npm run dev               # devvit playtest: installs to the dev subreddit, rebuilds on save, streams logs
 ```
 
@@ -173,11 +179,15 @@ End-to-end testing against real Reddit and Discord: see [TESTING.md](TESTING.md)
 
 ```
 .github/workflows/ci.yml                 CI: npm ci, npm test, npm run build
+.github/workflows/cleanup.yml            thread cleanup job, runs on GitHub Actions (separate from the app, see below)
 devvit.json                    app config: server entry, permissions, triggers, settings, dev subreddit
 src/server/index.ts            starts the HTTP server (Hono on Devvit's createServer, on getServerPort())
 src/server/app.ts              routes: the post-create, mod-action and post-delete triggers and the settings validation endpoints
 src/server/relay.ts            the relay: lookup, de-duplication, Discord create and delete calls
-src/server/discord.ts          Discord basics: bot token and channel checks, the REST call, advice per status, retryable-or-permanent classification (no Devvit imports)
+src/discord/client.ts          Discord basics: bot token and channel checks, the REST call, advice per status, retryable-or-permanent classification (no Devvit imports; also used by the cleanup script)
+src/discord/cleanup.ts         thread cleanup: list threads, classify, delete; rate-limit-aware, accepts an injected transport for tests
+src/discord/cleanup-main.ts    entry point of the cleanup bundle: env parsing, calls runCleanup
+src/discord/cleanup.test.ts    unit tests: snowflake dates, classification, runCleanup with a canned transport
 src/server/threads.ts          Redis records: the Discord thread id of each post, and which posts were removed
 src/server/alerts.ts           Modmail failure notices (relaying, deleting) with a once-a-day cooldown each
 src/server/relay.test.ts       unit tests for relaying, validation and alerts (mocked Redis, fetch and Modmail)
@@ -290,6 +300,52 @@ The following domain is requested for this app:
 This use complies with Reddit's fetch guidelines: `discord.com` is a publicly documented API (the REST API),
 requested by its exact hostname and used only for the purpose above. The data involved is described in the
 [Privacy Policy](PRIVACY.md), and the usage terms are in [TERMS.md](TERMS.md).
+
+---
+
+## Thread cleanup workflow
+
+A standalone GitHub Actions job (`.github/workflows/cleanup.yml`) that deletes stale threads from the forum channel.
+ It is **not part of the Devvit app**: it runs outside Reddit, reads nothing from it,
+and has no effect on the app's permissions, fetch domains,[Terms & Conditions](TERMS.md) or [Privacy Policy](PRIVACY.md).
+
+Every day at 2 AM UTC (cron `0 2 * * *`) it lists the forum channel's active and archived threads and
+deletes those that have **no replies** (`message_count` 0 — the count excludes the starter post) and were **created more
+than `INACTIVE_DAYS` days ago** (thread age comes from the snowflake id). Threads with any reply are kept, whatever
+their age.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `DISCORD_BOT_TOKEN` | Bot token, from the `DISCORD_BOT_TOKEN` repository secret | required |
+| `DISCORD_CHANNEL_ID` | Forum channel ID, from the `DISCORD_CHANNEL_ID` repository secret | required |
+| `INACTIVE_DAYS` | Delete empty threads older than this many days | `14` in the code; the workflow sets `30` |
+| `DRY_RUN` | Report without deleting. Fail-safe: only `false`, `0` or `no` turns it off, any other value (including a typo) is a dry run | dry run |
+
+Manual runs (Actions tab, **Run workflow**) accept two inputs that override the scheduled defaults: `inactive_days`
+(default `30`) and `dry_run` (default off, meaning real deletions — almost always run a dry run first).
+
+Notes:
+
+- **The token and channel are shared with the app.** The two secrets hold the same bot token and channel ID the
+  moderators configured as the app's settings. If the token is reset, update both the app settings and the repository
+  secrets; until then the cleanup fails with Discord 401. The channel ID must match the relayed forum channel.
+- **Permissions.** The cleanup needs only View Channel and Manage Threads on the forum channel — the four permissions
+  from the app's setup already cover it. It does not create posts or send messages.
+- **Message counts.** Discord reports `message_count` approximately and stops counting at 50; that is fine for the
+  "no replies" check, but the count in the logs of very busy threads may read 50.
+- **Listing failures warn but do not stop the run.** If listing (not deleting) fails, the affected part is skipped,
+  the run ends with fewer threads checked. Check "Threads checked" in the log or the GitHub run summary against
+  expectations; a much smaller number than usual means part of the channel was not examined.
+
+Run locally:
+
+```sh
+npm run build:cleanup
+DISCORD_BOT_TOKEN=... DISCORD_CHANNEL_ID=... INACTIVE_DAYS=30 DRY_RUN=true node dist/cleanup/index.cjs
+```
+
+Code: `src/discord/cleanup.ts` (logic), `src/discord/cleanup-main.ts` (bundle entry point),
+`src/discord/cleanup.test.ts` (unit tests). See [TESTING.md](TESTING.md) for how to check it.
 
 ---
 

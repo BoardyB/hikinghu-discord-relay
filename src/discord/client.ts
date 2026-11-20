@@ -53,7 +53,7 @@ export function parseConfig(rawToken: string, rawChannelId: string): DiscordConf
 }
 
 // `path` must only ever contain validated ids.
-export function discordRequest(config: DiscordConfig, method: "POST" | "DELETE", path: string, body?: unknown): Promise<Response> {
+export function discordRequest(config: DiscordConfig, method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<Response> {
   return fetch(`${API}${path}`, {
     method,
     headers: {

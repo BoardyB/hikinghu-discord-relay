@@ -8,6 +8,7 @@ All commands below are run from the root folder.
 - [1. End-to-end playtest](#1-end-to-end-playtest)
 - [2. Pre-publish checklist](#2-pre-publish-checklist)
 - [3. Troubleshooting](#3-troubleshooting)
+- [4. Thread cleanup script](#4-thread-cleanup-script)
 
 ---
 
@@ -146,3 +147,22 @@ settings and the Modmail notifications.
 | `could not notify mods: …` | Modmail failed (missing `reddit` permission in `devvit.json`, or an API error). The relay itself is unaffected. Fix the permission and republish. |
 | `subreddit is missing from Context` when you `curl` the server locally | Expected. Devvit's wrapper requires the platform's `devvit-*` headers, which Reddit adds. Test through `app.request(...)` in unit tests or through a real playtest instead. |
 | `EADDRINUSE … :::5678` | You ran `devvit logs` while `npm run dev` is already streaming. Use the playtest's own log output, or stop it first. |
+---
+
+## 4. Thread cleanup script
+
+The cleanup job (see the README's [Thread cleanup workflow](#thread-cleanup-workflow)) is separate from the app: it
+runs on GitHub Actions daily, reads no Reddit data, and needs the `DISCORD_BOT_TOKEN` and `DISCORD_CHANNEL_ID`
+repository secrets (the same bot token and forum channel the app's settings use).
+
+| Check | How | Expected |
+| --- | --- | --- |
+| Unit tests | `npm test` (includes `src/discord/cleanup.test.ts`, no network). | Pass. |
+| Local dry run | `npm run build:cleanup`, then run `dist/cleanup/index.cjs` with the two env vars, `INACTIVE_DAYS=30`, `DRY_RUN=true`. | Header `DRY RUN MODE ENABLED`, `[DRY RUN] Would delete inactive thread: …` only for empty threads older than the cutoff, then `=== Summary ===` with `Threads checked` and `Threads deleted`. No thread is deleted — verify the channel. |
+| CI dry run | Actions tab, Cleanup Inactive Threads, Run workflow, tick **Dry run**. | Same as the local run, in the job log. |
+| CI live run | Run workflow with **Dry run** off, after a dry run looked sane. | Empty, old threads disappear; threads with replies stay. The delete lines read `Deleting inactive thread: …`. |
+| Bad or missing secret | Temporarily invalidate the `DISCORD_BOT_TOKEN` secret, run the workflow. | The job fails with a channel/token error message and exits nonzero. |
+| Missing Manage Threads | Remove the bot's Manage Threads permission on the forum channel, run live. | Per-thread `Permission denied to access thread: '…'` lines; the run still ends with a summary. |
+
+`DRY_RUN` parsing is fail-safe: only `false`, `0` or `no` enables deletions, any other value (including a typo or a
+missing variable) is a dry run, and `INACTIVE_DAYS` must be a positive number or the job fails with a clear message.
