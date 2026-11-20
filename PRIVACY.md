@@ -33,14 +33,14 @@ Reddit users, even where Reddit includes it in the notification.
 
 ## What is stored
 
-| Data | Where | How long |
-| --- | --- | --- |
-| Post IDs of posts already relayed (to avoid duplicates) | Reddit's app storage for the installation | 30 days, then deleted automatically |
-| For each relayed post: the ID of its Discord thread (so the thread can be deleted if the post is removed). No title, link or text | Reddit's app storage for the installation | 30 days, or until the thread is deleted |
-| A marker that a post was removed (so it is not relayed, or its thread is deleted as soon as it exists). Only the post's ID | Reddit's app storage for the installation | 24 hours |
-| A marker that a failure notice was sent to the moderators (one for relaying problems, one for deleting problems) | Reddit's app storage for the installation | 24 hours |
-| The Discord bot token and the forum channel ID | The app's settings for the subreddit, kept by Reddit. Reddit shows them to the subreddit's moderators | Until the moderators change or clear them, or the app is uninstalled |
-| Operational logs: post IDs, subreddit names, Discord response codes, error messages | Reddit's logging for the app | According to Reddit's log retention |
+| Data                                                                                                                              | Where                                                                                                 | How long                                                             |
+| --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Post IDs of posts already relayed (to avoid duplicates)                                                                           | Reddit's app storage for the installation                                                             | 30 days, then deleted automatically                                  |
+| For each relayed post: the ID of its Discord thread (so the thread can be deleted if the post is removed). No title, link or text | Reddit's app storage for the installation                                                             | 30 days, or until the thread is deleted                              |
+| A marker that a post was removed (so it is not relayed, or its thread is deleted as soon as it exists). Only the post's ID        | Reddit's app storage for the installation                                                             | 24 hours                                                             |
+| A marker that a failure notice was sent to the moderators (one for relaying problems, one for deleting problems)                  | Reddit's app storage for the installation                                                             | 24 hours                                                             |
+| The Discord bot token and the forum channel ID                                                                                    | The app's settings for the subreddit, kept by Reddit. Reddit shows them to the subreddit's moderators | Until the moderators change or clear them, or the app is uninstalled |
+| Operational logs: post IDs, subreddit names, Discord response codes, error messages                                               | Reddit's logging for the app                                                                          | According to Reddit's log retention                                  |
 
 The developer does not copy this data elsewhere. The bot token is never written to logs or sent in messages, and the
 app sends it nowhere except to Discord, as the credential for its requests.

@@ -2,8 +2,8 @@ name: Cleanup Inactive Threads
 
 on:
   schedule:
-    - cron: "0 2 * * *"   # Run daily at 2 AM UTC
-  workflow_dispatch:      # Allow manual trigger
+    - cron: "0 2 * * *" # Run daily at 2 AM UTC
+  workflow_dispatch: # Allow manual trigger
     inputs:
       inactive_days:
         description: "Delete threads with no replies after N days"
@@ -19,25 +19,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Set up Node
-      uses: actions/setup-node@v4
-      with:
-        node-version: "24"
-        cache: npm
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
 
-    - name: Install dependencies
-      run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-    - name: Build cleanup script
-      run: npm run build:cleanup
+      - name: Build cleanup script
+        run: npm run build:cleanup
 
-    - name: Run cleanup
-      run: node dist/cleanup/index.cjs
-      env:
-        DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-        DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
-        # Dispatch runs use their inputs; scheduled runs fall back to the daily defaults.
-        INACTIVE_DAYS: ${{ inputs.inactive_days || '30' }}
-        DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+      - name: Run cleanup
+        run: node dist/cleanup/index.cjs
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          # Dispatch runs use their inputs; scheduled runs fall back to the daily defaults.
+          INACTIVE_DAYS: ${{ inputs.inactive_days || '30' }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}

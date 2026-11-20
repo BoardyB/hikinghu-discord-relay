@@ -1,5 +1,5 @@
-import {createServer, getServerPort} from "@devvit/web/server";
-import {serve} from "@hono/node-server";
-import {app} from "./app";
+import { createServer, getServerPort } from "@devvit/web/server"
+import { serve } from "@hono/node-server"
+import { app } from "./app"
 
-serve({ fetch: app.fetch, createServer, port: getServerPort() });
+serve({ fetch: app.fetch, createServer, port: getServerPort() })
