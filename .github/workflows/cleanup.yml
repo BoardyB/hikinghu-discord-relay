@@ -8,11 +8,11 @@ on:
       inactive_days:
         description: "Delete threads with no replies after N days"
         type: string
-        default: "30"
+        default: "14"
       dry_run:
         description: "Dry run: report threads without deleting"
         type: boolean
-        default: false
+        default: true
 
 jobs:
   cleanup-threads:
