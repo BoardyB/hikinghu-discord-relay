@@ -5,23 +5,27 @@
   "type": "module",
   "scripts": {
     "build:server": "esbuild src/server/index.ts --bundle --platform=node --format=cjs --outfile=dist/server/index.cjs",
-    "build": "npm run build:server",
+    "build:cleanup": "esbuild src/discord/cleanup-main.ts --bundle --platform=node --format=cjs --outfile=dist/cleanup/index.cjs",
+    "build": "npm run build:server && npm run build:cleanup",
     "dev": "devvit playtest",
-    "test": "npm run test:types && vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run format:check && npm run test:types && vitest run",
     "test:types": "tsc --noEmit"
   },
   "engines": {
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "@devvit/web": "0.15.1",
+    "@devvit/web": "0.15.3",
     "@hono/node-server": "^2.1.5",
-    "devvit": "0.15.1",
+    "devvit": "0.15.3",
     "hono": "4.13.16"
   },
   "devDependencies": {
-    "@devvit/test": "0.15.1",
+    "@devvit/test": "0.15.3",
     "esbuild": "^0.28.2",
+    "prettier": "^3.10.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   }
