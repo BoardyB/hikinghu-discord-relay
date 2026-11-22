@@ -53,6 +53,8 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+const GUILD_ID = "222222222222222222"
+
 /** Transport that records every call, answers the channel/active calls, and hands out archived pages in order. */
 function cannedFetch(
   archivedPages: Array<{ threads: CleanupThread[]; has_more: boolean }>,
@@ -66,8 +68,9 @@ function cannedFetch(
       deletes.push(path)
       return jsonResponse({}, 204)
     }
-    if (path.endsWith(`/channels/${CONFIG.channelId}`)) return jsonResponse({ name: "forum" })
-    if (path.includes("/threads/active")) return jsonResponse({ threads: [] })
+    if (path.endsWith(`/channels/${CONFIG.channelId}`))
+      return jsonResponse({ name: "forum", guild_id: GUILD_ID })
+    if (path === `/guilds/${GUILD_ID}/threads/active`) return jsonResponse({ threads: [] })
     return jsonResponse(archivedPages[archivedPagesSeen++] ?? { threads: [], has_more: false })
   }
   return { fetch, calls }
@@ -84,7 +87,7 @@ test("runCleanup pages through archived threads using before cursors", async () 
   )
   await runCleanup(CONFIG, 30, true, fetch)
   const archivedCalls = calls.filter(
-    (c) => c.method === "GET" && c.path.includes("/threads/archived"),
+    (c) => c.method === "GET" && c.path.includes("/threads/archived/public"),
   )
   expect(archivedCalls).toHaveLength(2)
   expect(archivedCalls[1].path).toContain("&before=")
@@ -107,6 +110,31 @@ test("runCleanup deletes an old thread with no replies outside dry run", async (
     deletes,
   )
   await runCleanup(CONFIG, 30, false, fetch)
+  expect(deletes).toEqual([`/channels/${OLD_ID}`])
+})
+
+test("runCleanup only lists active threads in the configured channel", async () => {
+  const deletes: string[] = []
+  const { fetch, calls } = cannedFetch([{ threads: [], has_more: false }], deletes)
+  // Wrap the guild active listing to inject threads from this and another channel.
+  const wrapped: Fetch = async (config, method, path) => {
+    if (path === `/guilds/${GUILD_ID}/threads/active`) {
+      // Still delegate to fetch so the call is recorded, but return our canned threads.
+      await fetch(config, method, path)
+      const body = {
+        threads: [
+          { ...ARCHIVED_THREAD, parent_id: CONFIG.channelId, message_count: 0 },
+          { ...ARCHIVED_THREAD, id: OLD_ID + "0", name: "other-channel", parent_id: "999" },
+        ],
+      }
+      return jsonResponse(body)
+    }
+    return fetch(config, method, path)
+  }
+  await runCleanup(CONFIG, 30, false, wrapped)
+  // Active threads are listed via the guild-level route (channel-level was removed).
+  expect(calls.some((c) => c.path === `/guilds/${GUILD_ID}/threads/active`)).toBe(true)
+  // Only the thread whose parent is the configured channel was deleted.
   expect(deletes).toEqual([`/channels/${OLD_ID}`])
 })
 

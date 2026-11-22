@@ -11,6 +11,8 @@ const DISCORD_EPOCH_MS = 1_420_070_400_000 // First second of 2015, Discord's sn
 export type CleanupThread = {
   id: string
   name?: string
+  /** Parent forum channel; used to only touch threads in the configured channel. */
+  parent_id?: string
   /** Excludes the starter post, so 0 means no replies. */
   message_count?: number
   thread_metadata?: { archive_timestamp?: string }
@@ -85,8 +87,9 @@ export async function runCleanup(
   if (!channelResponse.ok) {
     fail(`Channel ${config.channelId} not found (Discord answered ${channelResponse.status})`)
   }
-  const channel = (await channelResponse.json()) as { name?: string }
+  const channel = (await channelResponse.json()) as { name?: string; guild_id?: string }
   console.log(`Found channel: ${channel.name ?? "(unnamed)"}`)
+  const guildId = channel.guild_id
 
   const cutoffDate = new Date(Date.now() - inactiveDays * 86_400_000)
   console.log(
@@ -95,16 +98,16 @@ export async function runCleanup(
 
   // Active threads come in one page; archived ones are paginated by archive timestamp.
   const threads: Array<{ thread: CleanupThread; archived: boolean }> = []
-  const activeResponse = await doFetch(
-    config,
-    "GET",
-    `/channels/${config.channelId}/threads/active`,
-  )
-  if (activeResponse.ok) {
-    const active = (await activeResponse.json()) as ThreadList
-    for (const thread of active.threads ?? []) threads.push({ thread, archived: false })
-  } else {
-    console.warn(`Could not list active threads (Discord answered ${activeResponse.status})`)
+  if (guildId) {
+    const activeResponse = await doFetch(config, "GET", `/guilds/${guildId}/threads/active`)
+    if (activeResponse.ok) {
+      const active = (await activeResponse.json()) as ThreadList
+      for (const thread of active.threads ?? []) {
+        if (thread.parent_id === config.channelId) threads.push({ thread, archived: false })
+      }
+    } else {
+      console.warn(`Could not list active threads (Discord answered ${activeResponse.status})`)
+    }
   }
 
   console.log("\n=== Checking archived threads ===")
@@ -114,7 +117,7 @@ export async function runCleanup(
     const archivedResponse = await doFetch(
       config,
       "GET",
-      `/channels/${config.channelId}/threads/archived?limit=100${query}`,
+      `/channels/${config.channelId}/threads/archived/public?limit=100${query}`,
     )
     if (!archivedResponse.ok) {
       console.warn(`Could not list archived threads (Discord answered ${archivedResponse.status})`)
