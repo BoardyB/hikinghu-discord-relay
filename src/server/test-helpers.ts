@@ -10,7 +10,8 @@ export const TOKEN = "MTIzNDU2Nzg5.Gabcde.super-secret-token-value"
 export const CHANNEL_ID = "1100000000000000001"
 export const THREAD_ID = "1200000000000000002"
 export const CREATE_URL = `https://discord.com/api/v10/channels/${CHANNEL_ID}/threads`
-export const DELETE_URL = `https://discord.com/api/v10/channels/${THREAD_ID}`
+export const THREAD_URL = `https://discord.com/api/v10/channels/${THREAD_ID}`
+export const DELETE_URL = THREAD_URL
 
 export const POST = {
   id: "t3_abc",
@@ -24,6 +25,12 @@ export type Call = { url: string; init: RequestInit }
 
 export const CREATED: Reply = { status: 201, body: { id: THREAD_ID, parent_id: CHANNEL_ID } }
 export const DELETED: Reply = { status: 200, body: { id: THREAD_ID } }
+// What GET /channels/<thread> answers with. message_count excludes the starter message.
+export const EMPTY_THREAD: Reply = { status: 200, body: { id: THREAD_ID, message_count: 0 } }
+export const threadWithReplies = (count: number): Reply => ({
+  status: 200,
+  body: { id: THREAD_ID, message_count: count },
+})
 
 export const createEvent = (post: unknown = POST, subreddit = SUBREDDIT) =>
   ({ type: "PostCreate", post, subreddit }) as never
@@ -45,9 +52,13 @@ export function mockDiscord(handler: (call: Call) => Reply | Promise<Reply>): Ca
   return calls
 }
 
-/** Relay and delete both succeed, unless `remove` says the delete call fails. */
+/** Relay, thread lookup and delete all succeed, unless `remove` says the delete call fails. */
 export const discord = (remove: Reply = DELETED) =>
-  mockDiscord(({ init }) => (init.method === "DELETE" ? remove : CREATED))
+  mockDiscord(({ init }) => {
+    if (init.method === "DELETE") return remove
+    if (init.method === "GET") return EMPTY_THREAD
+    return CREATED
+  })
 
 /** A fetch that always rejects, e.g. the network is down. */
 export const fetchFails = () =>

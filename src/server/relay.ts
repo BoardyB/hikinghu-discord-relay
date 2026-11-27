@@ -6,6 +6,7 @@ import {
   type DiscordConfig,
   discordError,
   discordRequest,
+  lookupRejectionHint,
   parseConfig,
 } from "../discord/client"
 import {
@@ -163,13 +164,65 @@ async function rememberThread(
   }
 }
 
+// Reads how many replies the thread has. Discord's message_count excludes the starter
+// message (the relay's link to the post), so 0 means nothing but the link was posted.
+// The count is approximate and capped at 50, which is plenty: any reply protects the
+// thread. Undefined means Discord did not say, and the caller keeps the thread.
+async function readReplyCount(
+  config: DiscordConfig,
+  postId: string,
+  threadId: string,
+): Promise<number | undefined> {
+  let response: Response
+  try {
+    response = await discordRequest(config, "GET", `/channels/${threadId}`)
+  } catch (error) {
+    throw new Error(`discord lookup failed for ${postId}: ${describe(error)}`)
+  }
+
+  console.log(`Discord answered ${response.status} to looking up the thread of ${postId}`)
+  if (response.status === 404) {
+    // The thread is already gone, so there is nothing to protect from deletion.
+    return 0
+  }
+  if (!response.ok) {
+    throw discordError(
+      response,
+      `Discord refused to look up the thread of a removed post (${response.status})`,
+      lookupRejectionHint(response.status),
+    )
+  }
+
+  try {
+    const body = (await response.json()) as { message_count?: unknown } | null
+    if (typeof body?.message_count === "number") return body.message_count
+  } catch {
+    // No body, or not JSON.
+  }
+  return undefined
+}
+
 // Deletes the thread itself. A webhook could only delete the first message and would leave the
-// thread behind.
+// thread behind. Every caller goes through the reply check first: a thread with any conversation
+// is kept, even one this relay created moments ago — in that case a reply in the milliseconds
+// since creation is fanciful, but the rule has no exceptions.
 async function deleteThread(
   config: DiscordConfig,
   postId: string,
   threadId: string,
 ): Promise<void> {
+  const replies = await readReplyCount(config, postId, threadId)
+  if (replies === undefined || replies > 0) {
+    const why =
+      replies === undefined
+        ? "Discord did not say how many messages it has"
+        : `it has ${replies} ${replies === 1 ? "reply" : "replies"}`
+    console.log(`keeping the Discord thread of ${postId}: ${why}`)
+    // The thread stays, so no future removal needs this record again.
+    await clearThread(postId)
+    return
+  }
+
   let response: Response
   try {
     response = await discordRequest(config, "DELETE", `/channels/${threadId}`)

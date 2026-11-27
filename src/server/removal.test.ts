@@ -11,6 +11,7 @@ import {
   DELETE_URL,
   deletes,
   discord,
+  EMPTY_THREAD,
   fetchFails,
   mockDiscord,
   mockModmail,
@@ -18,6 +19,8 @@ import {
   route,
   SUBREDDIT,
   THREAD_ID,
+  threadWithReplies,
+  THREAD_URL,
   TOKEN,
 } from "./test-helpers"
 
@@ -99,6 +102,42 @@ test("removal: a 404 means the thread is already gone", async () => {
   expect(await redis.get("thread:abc")).toBeFalsy()
 })
 
+test("removal: keeps the thread when someone has replied to it", async () => {
+  const calls = mockDiscord(({ init }) => (init.method === "GET" ? threadWithReplies(1) : DELETED))
+  await relayPost()
+
+  await expect(handleRemoval("t3_abc")).resolves.toBeUndefined()
+
+  const lookups = calls.filter((call) => call.init.method === "GET")
+  expect(lookups).toHaveLength(1)
+  expect(lookups[0]!.url).toBe(THREAD_URL)
+  expect(deletes(calls)).toHaveLength(0)
+  expect(await storedThread()).toBeFalsy() // the record is dropped: the thread stays for good
+})
+
+test("removal: a lookup without a message count keeps the thread too", async () => {
+  const calls = mockDiscord(({ init }) =>
+    init.method === "GET" ? { status: 200, body: { id: THREAD_ID } } : DELETED,
+  )
+  await relayPost()
+
+  await expect(handleRemoval("t3_abc")).resolves.toBeUndefined()
+
+  expect(deletes(calls)).toHaveLength(0)
+  expect(await storedThread()).toBeFalsy() // the record is dropped: the thread stays for good
+})
+
+test("removal: a 403 on deleting an empty thread still gets its own advice", async () => {
+  mockDiscord(({ init }) => (init.method === "DELETE" ? { status: 403 } : EMPTY_THREAD))
+  await relayPost()
+
+  const error = await handleRemoval("t3_abc").catch((e) => e)
+
+  expect(error).toBeInstanceOf(PermanentError)
+  expect(error.hint).toContain("Manage Threads")
+  expect(await storedThread()).toBe(THREAD_ID)
+})
+
 test("removal: 5xx and 429 are retryable and keep the record for the retry", async () => {
   discord({ status: 500 })
   await relayPost()
@@ -128,15 +167,15 @@ test("removal: a network failure is retryable", async () => {
   expect(await storedThread()).toBe(THREAD_ID)
 })
 
-test("removal: other 4xx are permanent, with advice for the mods", async () => {
-  discord({ status: 403 })
+test("removal: other 4xx on the thread lookup are permanent, with advice for the mods", async () => {
+  mockDiscord(({ init }) => (init.method === "GET" ? { status: 403 } : CREATED))
   await relayPost()
 
   const error = await handleRemoval("t3_abc").catch((e) => e)
 
   expect(error).toBeInstanceOf(PermanentError)
   expect(error.message).toContain("403")
-  expect(error.hint).toContain("Manage Threads")
+  expect(error.hint).toContain("View Channel")
   expect(await storedThread()).toBe(THREAD_ID) // kept, so a later removal can try again
 })
 
@@ -203,6 +242,7 @@ test("race: a post removed before it was relayed is never relayed", async () => 
 test("race: a post removed while Discord is creating its thread has the thread deleted right away", async () => {
   const calls = mockDiscord(async ({ init }) => {
     if (init.method === "DELETE") return DELETED
+    if (init.method === "GET") return EMPTY_THREAD
     await handleRemoval("t3_abc") // the removal event arrives while the create is in flight
     return CREATED
   })
@@ -221,6 +261,7 @@ test("race: a removal that looked for the thread just before the relay recorded 
   const discordAnswers = new Promise<void>((resolve) => (finishCreate = resolve))
   const calls = mockDiscord(async ({ init }) => {
     if (init.method === "DELETE") return DELETED
+    if (init.method === "GET") return EMPTY_THREAD
     await discordAnswers
     return CREATED
   })
@@ -245,6 +286,7 @@ test("race: a removal that looked for the thread just before the relay recorded 
 test("race: a failing clean-up never breaks the create", async () => {
   mockDiscord(async ({ init }) => {
     if (init.method === "DELETE") return { status: 500 }
+    if (init.method === "GET") return EMPTY_THREAD
     await handleRemoval("t3_abc")
     return CREATED
   })
@@ -294,6 +336,26 @@ test("route post-delete: deletes the thread, whichever way the id is spelled", a
 
   expect(deletes(calls)).toHaveLength(1)
   expect(await redis.get("thread:abc")).toBeFalsy()
+})
+
+test("route mod-action: a thread with replies is kept, not deleted", async () => {
+  const calls = mockDiscord(({ init }) => (init.method === "GET" ? threadWithReplies(2) : DELETED))
+  await relayPost()
+
+  expect((await modAction("removelink")).status).toBe(200)
+
+  expect(deletes(calls)).toHaveLength(0)
+  expect(await storedThread()).toBeFalsy() // the record is dropped: the thread stays for good
+})
+
+test("route post-delete: a self-deleted post's thread with replies is kept too", async () => {
+  const calls = mockDiscord(({ init }) => (init.method === "GET" ? threadWithReplies(1) : DELETED))
+  await relayPost()
+
+  expect((await postDelete("t3_abc")).status).toBe(200)
+
+  expect(deletes(calls)).toHaveLength(0)
+  expect(await storedThread()).toBeFalsy() // the record is dropped: the thread stays for good
 })
 
 test("route post-delete: a payload without a post id is skipped", async () => {

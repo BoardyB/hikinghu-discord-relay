@@ -1,6 +1,6 @@
 # hikinghu-relay
 
-A [Devvit](https://developers.reddit.com) app: every new post in a subreddit becomes one thread in a Discord **forum channel**, and when Reddit removes or deletes that post, the app deletes the thread again. Replaces the old RSS-polling. Reddit hosts it — nothing to deploy or keep running.
+A [Devvit](https://developers.reddit.com) app: every new post in a subreddit becomes one thread in a Discord **forum channel**, and when Reddit removes or deletes that post, the app deletes the thread again — unless people have replied under it, in which case the conversation stays. Replaces the old RSS-polling. Reddit hosts it — nothing to deploy or keep running.
 
 This repo also ships a **thread cleanup workflow** (GitHub Actions) that deletes stale threads from the forum channel. It is separate from the app and documented under [Thread cleanup workflow](#thread-cleanup-workflow).
 
@@ -48,17 +48,17 @@ Setup takes a few minutes. You need a Discord **bot** for your server. It only c
 
 When something breaks in a way retrying cannot fix, the app sends a **Modmail notification** titled _"Discord relay is not working"_ with the cause, advice, and a link to the post that was not relayed. At most once a day.
 
-| Symptom or message                                           | Likely cause                                                                                      | Fix                                                                                      |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Modmail: _"rejected the bot token"_ (Discord 401)            | Token was reset or is wrong.                                                                      | Reset the token in the developer portal and paste the new one.                           |
-| Modmail: _"not allowed to create posts there"_ (Discord 403) | Bot lacks a permission on the forum channel.                                                      | Allow View Channel, Create Posts and Send Messages in Posts for the bot on that channel. |
-| Modmail: _"cannot find that channel"_ (Discord 404)          | Wrong channel ID, or the bot is not on the server.                                                | Copy the channel ID again and check the bot was invited.                                 |
-| Modmail: _"not a Forum channel"_ (Discord 400)               | Channel is a normal text channel, or the forum requires tags.                                     | Use a **Forum** channel that does not require a tag.                                     |
-| Saving a setting shows an error                              | Token has spaces in it, or the channel ID is not a number of 17 to 20 digits.                     | Copy it again. A leading `Bot ` in the token is fine.                                    |
-| No thread and no Modmail                                     | A setting is empty, the app is not installed, or the post was removed by Reddit's safety checks.  | Check both settings. New posts are relayed only after Reddit's checks pass.              |
-| Thread appears twice                                         | Should not happen (de-duplicated).                                                                | Tell the maintainer.                                                                     |
-| Modmail: _"Discord relay could not delete a thread"_         | Discord refused to delete the thread of a removed post, usually missing **Manage Threads**.       | Give the bot the permission. Delete the leftover thread by hand in Discord.              |
-| A removed post's thread is still in Discord                  | The thread predates this feature, or the post was removed more than 30 days after it was relayed. | Delete the thread by hand. New posts are handled automatically.                          |
+| Symptom or message                                           | Likely cause                                                                                                                                                | Fix                                                                                          |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Modmail: _"rejected the bot token"_ (Discord 401)            | Token was reset or is wrong.                                                                                                                                | Reset the token in the developer portal and paste the new one.                               |
+| Modmail: _"not allowed to create posts there"_ (Discord 403) | Bot lacks a permission on the forum channel.                                                                                                                | Allow View Channel, Create Posts and Send Messages in Posts for the bot on that channel.     |
+| Modmail: _"cannot find that channel"_ (Discord 404)          | Wrong channel ID, or the bot is not on the server.                                                                                                          | Copy the channel ID again and check the bot was invited.                                     |
+| Modmail: _"not a Forum channel"_ (Discord 400)               | Channel is a normal text channel, or the forum requires tags.                                                                                               | Use a **Forum** channel that does not require a tag.                                         |
+| Saving a setting shows an error                              | Token has spaces in it, or the channel ID is not a number of 17 to 20 digits.                                                                               | Copy it again. A leading `Bot ` in the token is fine.                                        |
+| No thread and no Modmail                                     | A setting is empty, the app is not installed, or the post was removed by Reddit's safety checks.                                                            | Check both settings. New posts are relayed only after Reddit's checks pass.                  |
+| Thread appears twice                                         | Should not happen (de-duplicated).                                                                                                                          | Tell the maintainer.                                                                         |
+| Modmail: _"Discord relay could not delete a thread"_         | Discord refused to delete the thread of a removed post, usually missing **Manage Threads**.                                                                 | Give the bot the permission. Delete the leftover thread by hand in Discord.                  |
+| A removed post's thread is still in Discord                  | The thread predates this feature, the post was removed more than 30 days after it was relayed, or the thread has replies — conversations are never deleted. | Delete the thread by hand (only if it really is empty). New posts are handled automatically. |
 
 Still stuck? Contact the maintainer: **[https://www.reddit.com/user/boardyb/]**.
 
@@ -85,9 +85,11 @@ Reddit (a mod removes or spams the post, or the post is deleted)
 POST /internal/triggers/mod-action  and  /internal/triggers/post-delete
    │  1. read the two settings (skip if either is empty)
    │  2. look up the thread that was created for the post
-   │  3. DELETE /channels/<thread> as the bot
+   │  3. GET /channels/<thread>: delete only when nobody has replied (message_count 0,
+   │     which excludes the starter message); a thread with replies is kept for good
+   │  4. DELETE /channels/<thread> as the bot
    ▼
-Thread gone from Discord
+Thread gone from Discord (empty threads only)
 ```
 
 On failure and on every non-happy path:
@@ -99,6 +101,7 @@ On failure and on every non-happy path:
 | A setting is empty (paused or not configured yet)                                               | Logs and skips. Not an error.                                                                                                                                                                                                                    |
 | Duplicate delivery of the same post                                                             | Skipped, so there is never a second thread.                                                                                                                                                                                                      |
 | A post removed while its thread is being created (or before the relay reached it)               | The removal first leaves a 24-hour marker; the relay and the removal side are ordered so one always sees the other — the thread is skippped or deleted the moment it exists. Discord answering 404 on a delete (already gone) counts as success. |
+| A thread that has replies (a conversation grew under the post)                                  | Kept, whatever the removal kind — mod removal or the author deleting the post. The lookup happens before the delete; if Discord does not report a message count, the thread is kept too.                                                         |
 
 Design choices, one line each:
 
@@ -109,6 +112,7 @@ Design choices, one line each:
 - **The token goes nowhere but Discord.** Requests go only to `https://discord.com/api/v10/`, with paths built from validated ids. The token is never logged and never put in a Modmail notice (a test checks both).
 - **Only ids are kept.** To delete a thread later the app stores its id, never the title, link or text.
 - **Only removals delete.** The app acts on `removelink`, `spamlink` and post deletions. Approvals, locks, flair changes and bans are ignored, and a re-approved post is not re-relayed.
+- **Threads with replies are never deleted.** Before deleting, the app reads the thread's `message_count` (which excludes the starter message, same convention as the cleanup workflow) and deletes only when it is 0 — for mod removals and self-deleted posts alike, with no exceptions. An unreadable count keeps the thread; if that ever strands a freshly created thread behind a removed post, the cleanup workflow removes it once it is old enough.
 - **Two separate Modmail limits.** A failing delete and a failing relay each get their own once-a-day notice, so one cannot hide the other.
 
 ---
