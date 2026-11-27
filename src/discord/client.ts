@@ -109,6 +109,19 @@ export function deleteRejectionHint(status: number): string | undefined {
   }
 }
 
+// Reading a thread before deleting it (to check whether anyone replied) needs the same
+// channel-level permissions as posting there.
+export function lookupRejectionHint(status: number): string | undefined {
+  switch (status) {
+    case 401:
+      return TOKEN_REJECTED
+    case 403:
+      return "The bot is not allowed to read the thread. On the forum channel give it View Channel, Send Messages in Posts and Read Message History."
+    default:
+      return undefined
+  }
+}
+
 // 429 and 5xx may clear up, so they stay retryable. Everything else is permanent.
 export function discordError(response: Response, permanentMessage: string, hint?: string): Error {
   if (response.status === 429 || response.status >= 500) {
